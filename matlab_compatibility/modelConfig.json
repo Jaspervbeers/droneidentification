@@ -1,0 +1,8 @@
+{
+    "model path":"../../../Models/HDBeetle",
+    "model ID":"MDL-HDBeetle-NN-II-NOP008-G-Quadratic_TEST",
+    "droneConfig path":"../../../FlightData",
+    "droneConfig name":"HDBeetleConfig.json",
+    "make moment DiffSys":true,
+    "DiffSys u":["U_p", "U_q", "U_r"]
+}

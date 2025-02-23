@@ -1,0 +1,55 @@
+{
+    "logging file":{
+        "directory":"../../../FlightData",
+        "filename":"HDBeetle_file_log",
+        "rows of flights to use (all)":[
+            2,
+            3,
+            4,
+            5,
+            8,
+            7,
+            9,
+            10,
+            11,
+            41,
+            42,
+            43,
+            45,
+            46,
+            47,
+            50,
+            53,
+            55,
+            58,
+            59,
+            61,
+            63,
+            65,
+            66,
+            67,
+            69,
+            70,
+            72,
+            73
+        ],
+        "rows of flights for validation":[]
+    },
+    "filtered data save directory":"../../../FlightData/processed/filtered/HDBeetle/withGravity",
+    "plotting":{
+        "show trajectories":false,
+        "show animation":false
+    },
+    "data normalization":{
+        "normalize data":false,
+        "usable data ratio":0.90
+    },
+    "data partitioning":{
+        "random partition":true
+    },
+    "saving models":{
+        "save identified models":true,
+        "save directory":"../../../Models/HDBeetle",
+        "model ID":"MDL-HDBeetle-NN-II-Rtr-NGP0011"
+    }
+}

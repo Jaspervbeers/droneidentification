@@ -1,0 +1,6 @@
+{
+    "sysidpipeline":"../sysidpipeline",
+    "blackbox-tools-0.4.3":"../../../FlightData/blackbox-tools-0.4.3/obj",
+    "blackbox-tools-0.4.3-windows":"../../../FlightData/blackbox-tools-0.4.3-windows",
+    "droneviz":"../../utility/droneviz"
+}

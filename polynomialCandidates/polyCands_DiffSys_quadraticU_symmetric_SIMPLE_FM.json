@@ -1,0 +1,134 @@
+{
+    "Fx":{
+        "candidates":[
+            {
+                "vars":["u"],
+                "degree":4,
+                "sets":[1, "w_tot", "q", "U_q"]
+            },
+            {
+                "vars":["q"],
+                "degree":3,
+                "sets":[1, "w_tot"]
+            },
+            {
+                "vars":["mu_x"],
+                "degree":4,
+                "sets":[1, "w_tot", "q", "U_q"]
+            }
+        ],
+        "fixed":[
+            "u"
+        ]
+    },
+
+    "Fy":{
+        "candidates":[
+            {
+                "vars":["v"],
+                "degree":4,
+                "sets":[1, "w_tot", "p", "U_p"]
+            },     
+            {
+                "vars":["p"],
+                "degree":3,
+                "sets":[1, "w_tot"]
+            },
+            {
+                "vars":["mu_y"],
+                "degree":4,
+                "sets":[1, "w_tot", "p", "U_p"]
+            }
+        ],
+        "fixed":[
+            "v"
+        ]
+    },
+
+    "Fz":{
+        "candidates":[
+            {
+                "vars":["|u|", "|v|", "w"],
+                "degree":4,
+                "sets":[1, "d_w_tot", "|p|", "|q|", "|r|", "|U_p|", "|U_q|", "|U_r|"]
+            },
+            {
+                "vars":["|p|", "|q|", "|r|"],
+                "degree":3,
+                "sets":[1, "d_w_tot"]
+            },
+            {
+                "vars":["|mu_x|", "|mu_y|", "mu_z"],
+                "degree":4,
+                "sets":[1, "d_w_tot", "|p|", "|q|", "|r|", "|U_p|", "|U_q|", "|U_r|"]
+            },
+            {
+                "vars":["|U_q|", "|U_p|", "|U_r|"],
+                "degree":3,
+                "sets":[1, "d_w_tot"]
+            },
+            {
+                "vars":["d_w_tot"],
+                "degree":4,
+                "sets":[1]
+            }                        
+        ],
+        "fixed":[
+            "w", "(w2_1 + w2_2 + w2_3 + w2_4)"
+        ]
+    },
+
+    "Mx":{
+        "candidates":[
+            {
+                "vars":["p"],
+                "degree":4,
+                "sets":[1]
+            },
+            {
+                "vars":["U_p"],
+                "degree":4,
+                "sets":[1]
+            }            
+        ],
+        "fixed":[
+            "p", "U_p"
+        ]
+    },
+
+    "My":{
+        "candidates":[
+            {
+                "vars":["q"],
+                "degree":4,
+                "sets":[1]
+            },
+            {
+                "vars":["U_q"],
+                "degree":4,
+                "sets":[1]
+            }            
+        ],
+        "fixed":[
+            "q", "U_q"
+        ]
+    },
+
+    "Mz":{
+        "candidates":[
+            {
+                "vars":["r"],
+                "degree":4,
+                "sets":[1]
+            },
+            {
+                "vars":["U_r"],
+                "degree":4,
+                "sets":[1]
+            }            
+        ],
+        "fixed":[
+            "r", "U_r"
+        ]
+    }
+}

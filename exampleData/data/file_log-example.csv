@@ -1,0 +1,2 @@
+Flight ID,Rigid Body Name,Quadrotor,Initial Yaw Offset,Has OT data,Raw OptiTrack Name,Raw OT Path,Onboard Name,OB Path,OB row skip,OB num columns,Indoor or Outdoor,Flight controller,Batteries,Mode,Mass,Drone Config File,Drone Config Path,Video,Video Path,Comments
+1,MetalBeetle,MyDrone,90,Y,MyDrone-example,exampleData/data/raw/OptiTrack,MyDrone-example,exampleData/data/raw/Onboard,112,60,Indoor,betaflight,4S,LOS,433,droneConfig,exampleData/data,,,

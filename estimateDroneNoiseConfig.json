@@ -1,0 +1,10 @@
+{
+    "drone configuration file path":"../../../FlightData",
+    "drone configuration file name":"DataCanConfig",
+    "add noise results to config file":true,
+    "cutoff ratio":"0.15",
+    "noise files (onboard data) path":"../../../FlightData/raw/DataCan75/Onboard/Noise",
+    "exclude files":[
+        
+    ]
+}

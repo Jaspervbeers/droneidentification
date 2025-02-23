@@ -1,0 +1,58 @@
+{
+    "logging file":{
+        "directory":"exampleData/data",
+        "filename":"file_log-example",
+        "rows of flights to use (all)":[2],
+        "rows of flights for validation":[]
+    },
+    "data importing":{
+        "import raw data":true,
+        "resampling rate":250,
+        "filter optitrack outliers":true,
+        "optitrack velocity Hz cutoff":10,
+        "save raw data":true,
+        "imported data save directory":"exampleData/data/processed/imported",
+        "align with optitrack using":["roll", "pitch"],
+        "max permitted lag for optitrack":25
+    },
+    "data filtering":{
+        "use noise statistics in drone config":false,
+        "run extended kalman filter":true,
+        "save kalman filter convergence results":false,
+        "remove influence of gravity":true,
+        "save filtered data":true,
+        "filtered data save directory":"exampleData/data/processed/filtered"
+    },
+    "plotting":{
+        "show trajectories":true,
+        "show animation":false
+    },
+    "data normalization":{
+        "normalize data":true,
+        "usable data ratio":0.95
+    },
+    "data partitioning":{
+        "random partition":true
+    },
+    "manoeuvre excitations":{
+        "isolate to regions of excitation":false,
+        "excitation threshold":0.3
+    },
+    "identification parameters":{
+        "identify fx":true,
+        "identify fy":true,
+        "identify fz":true,
+        "identify mx":true,
+        "identify mz":true,
+        "identify my":true,
+        "prediction interval confidence level":0.95,
+        "polynomial":{
+            "regressor cap":6
+        }
+    },
+    "saving models":{
+        "save identified models":true,
+        "save directory":"exampleData/models",
+        "model ID":"MDL-MyDrone-example"
+    }
+}
