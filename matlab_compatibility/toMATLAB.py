@@ -292,7 +292,7 @@ with open('../standaloneConfig.json', 'w') as f:
 
 # Load models and export to standlone versions
 try:
-    subprocess.call([sys.executable, 'makeStandalonePolyModelV3.py'], cwd = os.path.join(os.getcwd(), '../'))
+    subprocess.call([sys.executable, 'makeStandalonePolyModel.py'], cwd = os.path.join(os.getcwd(), '../'))
 except Exception as e:
     with open('../standaloneConfig.json', 'w') as f:
         json.dump(originalStandaloneConfig, f, indent = 4)
