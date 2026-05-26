@@ -732,14 +732,14 @@ def measurement_eq(x, u, t, v = None):
     z_pred = v.copy()*0
 
     # Angle measurement predictions
-    z_pred[0] = x[0] + v[0]
-    z_pred[1] = x[1] + v[1]
-    z_pred[2] = x[2] + v[2]
+    z_pred[0] = x[0].__array__().reshape(-1)[0] + v[0]
+    z_pred[1] = x[1].__array__().reshape(-1)[0] + v[1]
+    z_pred[2] = x[2].__array__().reshape(-1)[0] + v[2]
 
     # Velocity measurement predictions
-    z_pred[3] = x[3] + v[3]
-    z_pred[4] = x[4] + v[4]
-    z_pred[5] = x[5] + v[5]    
+    z_pred[3] = x[3].__array__().reshape(-1)[0] + v[3]
+    z_pred[4] = x[4].__array__().reshape(-1)[0] + v[4]
+    z_pred[5] = x[5].__array__().reshape(-1)[0] + v[5]    
 
     return z_pred
 
