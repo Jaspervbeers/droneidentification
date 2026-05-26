@@ -54,5 +54,6 @@
         "save identified models":true,
         "save directory":"exampleData/models",
         "model ID":"MDL-MyDrone-example"
-    }
+    },
+    "skip check path": false
 }

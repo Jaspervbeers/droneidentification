@@ -1,0 +1,109 @@
+{
+    "Fx":{
+        "candidates":[
+            {
+                "vars":["u"],
+                "degree":1,
+                "sets":[1, "w_tot", "q"]
+            },
+            {
+                "vars":["q"],
+                "degree":2,
+                "sets":[1, "w_tot"]
+            }
+        ],
+        "fixed":[
+            "u"
+        ]
+    },
+
+    "Fy":{
+        "candidates":[
+            {
+                "vars":["v"],
+                "degree":1,
+                "sets":[1, "w_tot", "p"]
+            },     
+            {
+                "vars":["p"],
+                "degree":2,
+                "sets":[1, "w_tot"]
+            }
+        ],
+        "fixed":[
+            "v"
+        ]
+    },
+
+    "Fz":{
+        "candidates":[
+            {
+                "vars":["w"],
+                "degree":1,
+                "sets":[1, "w_tot", "|u| + |v|"]
+            },
+            {
+                "vars":["w_tot", "|U_p|", "|U_q|", "|U_r|"],
+                "degree":2,
+                "sets":[1, "w"]
+            }                        
+        ],
+        "fixed":[
+            "w", "(w2_1 + w2_2 + w2_3 + w2_4)"
+        ]
+    },
+
+    "Mx":{
+        "candidates":[
+            {
+                "vars":["p", "v", "U_p"],
+                "degree":1,
+                "sets":[1]
+            },
+            {
+                "vars":["U_p"],
+                "degree":1,
+                "sets":["w_tot"]
+            }                  
+        ],
+        "fixed":[
+            "U_p"
+        ]
+    },
+
+    "My":{
+        "candidates":[
+            {
+                "vars":["q", "u", "U_q"],
+                "degree":1,
+                "sets":[1]
+            },
+            {
+                "vars":["U_q"],
+                "degree":1,
+                "sets":["w_tot"]
+            }          
+        ],
+        "fixed":[
+            "U_q"
+        ]
+    },
+
+    "Mz":{
+        "candidates":[
+            {
+                "vars":["r", "w", "U_r"],
+                "degree":1,
+                "sets":[1]
+            },
+            {
+                "vars":["U_r"],
+                "degree":1,
+                "sets":["w_tot"]
+            }             
+        ],
+        "fixed":[
+            "U_r"
+        ]
+    }
+}

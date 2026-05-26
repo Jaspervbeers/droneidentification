@@ -2,6 +2,7 @@ import numpy as np
 from tqdm import tqdm
 import scipy.signal as signal
 import pandas as pd
+import math
 
 from common import solvers, angleFuncs
 from processing import quadrotorFM
@@ -32,8 +33,8 @@ def Continuous2DiscreteAB(A, B, dt, approximation_terms = 5):
     Bk = B*dt
     # Compute Taylor up to approximation_terms
     for i in range(approximation_terms):
-        Ak += 1/np.math.factorial(i + 1) * A ** (i + 1) * dt ** (i + 1)
-        Bk += np.matmul(1/np.math.factorial(i + 2) * A ** (i + 1), B * dt ** (i + 2))
+        Ak += 1/math.factorial(i + 1) * A ** (i + 1) * dt ** (i + 1)
+        Bk += np.matmul(1/math.factorial(i + 2) * A ** (i + 1), B * dt ** (i + 2))
     # Revert A back to its original shape
     if counter > 0:
         Ak = Ak[:-counter]
@@ -442,7 +443,7 @@ def runFilter(rowIdx, rawData, droneMass, droneParams, logFile, removeGravityCom
     # attitude
     filteredData['roll'], filteredData['pitch'], filteredData['yaw'] = X_est[:, 0], X_est[:, 1], X_est[:, 2]
 
-    # Derive forces
+    # Derive forces, assume acceleration is measured by IMU onboard drone
     F = quadrotorFM.calcF(droneMass, filteredData[['ax', 'ay', 'az']].to_numpy())
     if removeGravityComponent:
         # Remove gravity from forces

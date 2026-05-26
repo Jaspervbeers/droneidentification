@@ -10,6 +10,7 @@ import pandas as pd
 import pickle as pkl
 import json
 from datetime import datetime # Used to tag metadata with information about date of creation.
+import sys
 
 # ================================================================================================================================ #
 # Local Imports
@@ -50,8 +51,12 @@ def checkParamConsistency(currentParams, referenceParams):
 '''
 Extract & Define processing parameters
 '''
+if len(sys.argv) > 1:
+    configfile = sys.argv[1]
+else:
+    configfile = 'processingConfig.json'
 # TODO: Save this config file as metadata
-with open('processingConfig.json', 'r') as f:
+with open(configfile, 'r') as f:
     processingConfig = json.load(f)
 
 # Extract logging file information
@@ -124,7 +129,7 @@ Import raw data
 if importRawData:
     # rawDataList = []
     rawDataDict = {}
-    for row in rowIdxs:
+    for row in filtering.tqdm(rowIdxs):
         print('[ INFO ] Importing rowIdx: {}'.format(row +2))
         rawData = importing.runImport(rowIdx = row, log = log, OB_samplingRate = resampleRate, maxLag_seconds = maxLag, 
                                         alignUsing = alignUsing, filterOutliersOT=filterOutliersOT, velocityCutoffHz=velocityCutoffHz, 

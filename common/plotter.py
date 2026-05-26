@@ -26,6 +26,7 @@ import mpl_toolkits.mplot3d.art3d as art3d
 import os
 import pickle as pkl
 import scipy.stats as stats
+import json
 
 # Alternative for alphashape
 # https://stackoverflow.com/questions/23073170/calculate-bounding-polygon-of-alpha-shape-from-the-delaunay-triangulation
@@ -37,6 +38,18 @@ try:
 except ModuleNotFoundError:
     cmap = 'viridis'
     print('[ WARNING ] Package alphashape and/or descartes not found. Some plotting utilities will not work.')
+
+
+# Color palate:
+myOrange = '#e67d0a'
+myBlue = '#008bb4'
+myGreen = 'mediumseagreen'
+myYellow = '#ffbe3c'
+myRed = 'firebrick'
+myGrey = 'gainsboro'
+myVelvet = 'mediumvioletred'
+myOrangeRed = '#E5340B'
+myPurple = 'mediumorchid'
 
 
 # ================================================================================================================================ #
@@ -89,14 +102,25 @@ def makeFig(nrows = 1, ncolumns = 1, returnGridSpec = False, **kwargs):
         return fig
 
 
-def makeBoldLabel(ax, label, unit = None, which = 'x'):
-    if unit is None:
-        unit = ''
-    else:
-        unit = f', {unit}'
-    axesMapper = {'x':ax.set_xlabel, 'y':ax.set_ylabel, 'z':ax.set_zlabel}
-    labelList = label.split(' ')
-    return None
+# def makeBoldLabel(ax, label, unit = None, which = 'x'):
+#     if unit is None:
+#         unit = ''
+#     else:
+#         unit = f', {unit}'
+#     axesMapper = {'x':ax.set_xlabel, 'y':ax.set_ylabel, 'z':ax.set_zlabel}
+#     labelList = label.split(' ')
+#     return None
+
+def makeBoldLabel(label):
+    '''
+    Make a label bold
+    '''
+    split = label.split(' ')
+    boldSplit = []
+    for s in split:
+        boldSplit.append(r'$\mathbf{' + s + r'}$')
+    boldLabel = ' '.join(boldSplit)
+    return boldLabel
 
 
 def _SaveStatePhases(filename, states, proportion = 1, alphaShapeSensitivity = 0.1, savePath = None):
@@ -844,7 +868,8 @@ def plotModelWithPI(y_true, y_preds, y_pred_vars, confidence = 0.95, x = None, r
         x = np.arange(len(y_true))
     # defaultColors = ['mediumseagreen', 'mediumorchid']
     # defaultColors = ['#ffbe3c', 'mediumaquamarine', '#008bb4']
-    defaultColors = ['#008bb4', 'mediumaquamarine', '#ffbe3c', 'firebrick']
+    # defaultColors = ['#008bb4', 'mediumaquamarine', '#ffbe3c', 'firebrick']
+    defaultColors = ['mediumseagreen', '#008bb4', 'mediumorchid']
     if colors is None:
         colors = cycle(defaultColors)
     else:
@@ -867,7 +892,7 @@ def plotModelWithPI(y_true, y_preds, y_pred_vars, confidence = 0.95, x = None, r
     ax.tick_params(which='both', direction='in', labelsize=14)
     ax.xaxis.set_minor_locator(AutoMinorLocator())
     ax.yaxis.set_minor_locator(AutoMinorLocator())
-    ax.legend()
+    ax.legend(loc='upper right')
     if returnFig:
         return fig
     else:
@@ -1023,7 +1048,6 @@ def plotExcitations(target, excitationIdxs, ProcessedData, segregatedIdxs = None
     ax.legend(handles = handles)
 
     plt.tight_layout()
-
     return fig
 
 
@@ -1031,6 +1055,7 @@ def ValidationRMSEExplorer(Data, Model, TargetColumn, Predictions, ValidationIdx
     c1 = '#ffbe3c'
     c2 = '#e67d0a'
     fig = plt.figure(figsize=(12, 7))
+    fig.suptitle('Model invalidity diagnositics. RMSE as function of model output.')
     gs = fig.add_gridspec(nrows=1, ncols=5)
     ax1 = fig.add_subplot(gs[:, :3])
     ax2 = fig.add_subplot(gs[:, 3:], sharey = ax1)
@@ -1159,3 +1184,219 @@ def ValidationRMSEExplorer(Data, Model, TargetColumn, Predictions, ValidationIdx
     plt.tight_layout()
 
     return fig
+
+
+def lmapper(reg):
+    lreg = reg.replace('(w2_1 + w2_2 + w2_3 + w2_4)', r'\sum_{i=1}^{4}\omega^{2}_{i}')
+    lreg = lreg.replace('((|u| + |v|)^(2))*(w^(1.0))', r'{[|u| + |v|]}^{2}*w')
+    lreg = lreg.replace(' ', '')
+    lreg = lreg.replace('(', '{').replace(')', "}")
+    lreg = lreg.replace('w_tot', r'\omega_{tot}')
+    lreg = lreg.replace('.0', '')
+    lreg = lreg.replace('*', r' \cdot ')
+    lreg = lreg.replace('[', '(').replace(']', ')')
+    return makeBoldLabel(lreg)
+
+
+def plot_IOD(modelSavePath, MDLMAP, ProcessedData, idx_tr, idx_val, excitationIdxs, figsize = (10, 7), convex = False, latex_mapper = lmapper, cnColor = 'k', linewidth = 2):
+    # MDLS = ['Fx', 'Fy', 'Fz', 'Mx', 'My', 'Mz']
+    savestr = ''
+    which = 'convex' if convex else 'concave'
+    mdl_to_ax_map = {}
+    jmax = 0
+    for i, (name, MDL) in enumerate(MDLMAP.items()):
+        rmap = {}
+        Regressors = MDL.TrainedModel['Model']['Regressors']
+        iod_file = f'{modelSavePath}/{name}/IOD_{which}.json'
+        if not os.path.exists(iod_file):
+            raise ValueError(f'Could not find IOD file: {iod_file}')
+        with open(iod_file, 'r') as f:
+            iod_data = json.load(f)
+        j = 0
+        for idx, r in enumerate(Regressors):
+            if r != 'bias':
+                rmap.update({j:{'reg':r, 'idx':idx}})
+                j+=1
+        if j > jmax:
+            jmax = j
+        savestr += name
+        mdl_to_ax_map.update({name:{'map':rmap, 'model':MDL, 'iod':iod_data}})
+    # Plot
+    fig = plt.figure(figsize=figsize)
+    gs = fig.add_gridspec(nrows = len(MDLMAP), ncols = jmax)
+    axshadow = fig.add_subplot(gs[0, :])
+    handles = []
+    addLegendPatch(handles, color = myGreen, label = 'Validation data', alpha = 0.8)
+    addLegendPatch(handles, color = myVelvet, label = 'Training data', alpha = 0.8)
+    addLegendLine(handles, color = myGrey, label = 'Zero-line')
+    addLegendPatch(handles, facecolor = 'none', edgecolor = 'k', label = 'IOD contour', linewidth = 2)
+    lgd = axshadow.legend(handles=handles, fontsize = 14,
+                        bbox_to_anchor=(0, 1.2, 1, 0.2), loc="lower left", mode="expand", ncol=2,  labelspacing = 0.8,  borderaxespad=0, handlelength = 3, columnspacing=1)
+    lgd._legend_box.align = "left"
+    axshadow.axis('off')
+    for i, (_MDL, Mdata) in enumerate(mdl_to_ax_map.items()):
+        MDL = Mdata['model']
+        Regressors = MDL.TrainedModel['Model']['Regressors']
+        hasBias = True if 'bias' in Regressors else False
+        _idx_tr = idx_tr.copy()
+        if len(excitationIdxs[_MDL]):
+            _idx_tr = np.intersect1d(idx_tr, excitationIdxs[_MDL])
+        MAT = np.asarray(MDL._techniqueModule._BuildRegressorMatrix(Regressors, ProcessedData, hasBias = hasBias))*np.asarray(MDL.TrainedModel['Model']['Parameters']).reshape(-1)
+        for j, rmap in mdl_to_ax_map[_MDL]['map'].items():
+            if j == 0:
+                ax = fig.add_subplot(gs[i, j])
+                axRef = ax
+                ax.set_ylabel(makeBoldLabel(f'{_MDL[0]}_' + '{' + f'{_MDL[1]}' + '}') + ', N' + ('m' if _MDL.startswith('M') else ''), fontsize = 14)
+            else:
+                ax = fig.add_subplot(gs[i, j], sharey = axRef)
+                plt.setp(ax.get_yticklabels(), visible = False)
+            ax.scatter(MAT[idx_val, rmap['idx']], ProcessedData.loc[idx_val, _MDL].to_numpy(), color = myGreen, alpha = 0.05, s = 1, zorder = 10, rasterized = True)
+            ax.scatter(MAT[_idx_tr, rmap['idx']], ProcessedData.loc[_idx_tr, _MDL].to_numpy(), color = myVelvet, alpha = 0.05, s = 1, zorder = 20, rasterized = True)
+            hull = np.array(Mdata['iod'][rmap['reg']]['hull'])
+            contour = np.vstack([hull, hull[0:1]]) if hull.shape[0] > 0 else hull
+            ax.plot(contour[:, 0], contour[:, 1], color = cnColor, linewidth = linewidth, zorder = 1000)
+            (xmin, xmax) = ax.get_xlim()
+            ax.set_xticks([xmin, xmax])
+            addVLINE(ax, 0, xmin - np.abs(xmin), xmax + np.abs(xmax), color = myGrey, zorder = 1)
+            if i == 0:
+                ax.set_title(makeBoldLabel(f'Regressor {j+1}'))
+            hndls = []
+            addLegendPatch(hndls, facecolor = 'none', edgecolor = 'none', label = latex_mapper(rmap['reg']))
+            ax.legend(loc = 'best', handles = hndls)
+    fig.supxlabel(makeBoldLabel('Regressor contribution') + ', N' + ('m' if _MDL.startswith('M') else ''), fontsize = 14)
+    plt.tight_layout()
+    plt.savefig(f'{modelSavePath}/IOD_{savestr}.pdf', dpi = 600)
+    plt.savefig(f'{modelSavePath}/IOD_{savestr}.png', dpi = 600)
+    # plt.show()
+
+
+
+def plot_eval_results(eval_results, mdl):
+    error = eval_results['Residual Error']
+    ar = eval_results['Autocorrelation']
+    CV = eval_results['Coefficient Variance']
+
+    N = len(error)
+    index = np.arange(0, N, 1)
+    e_mean = np.nanmean(error)
+    e_sig = np.nanstd(error)
+    n_index = -1*np.array(sorted(index, reverse=True))[:-1]
+    lag = np.hstack((n_index, index))
+    coeffIndex = np.arange(1, len(CV)+1, 1)
+
+    fig = plt.figure(figsize = (10, 5))
+    gs = fig.add_gridspec(3, 3)
+    ax1 = fig.add_subplot(gs[:, 0])
+    ax1.plot(index, error.reshape(index.shape), color = 'k', alpha = 0.8)
+    ax1.plot(index, np.ones(index.shape)*e_mean, color = myGreen, linestyle='--', linewidth = 2, label = 'Mean ' + r'$\epsilon$' + ' = {}'.format(str(round(e_mean, 4))))
+    ax1.plot(index, np.ones(index.shape)*e_sig + e_mean, color = myVelvet, linestyle='--', linewidth = 2, label = r'$1-\sigma$ bounds')
+    ax1.plot(index, -1*np.ones(index.shape)*e_sig + e_mean, color = myVelvet, linestyle='--', linewidth = 2)
+    prettifyAxis(ax1)
+    ax1.set_xlabel(r'$\mathbf{Sample}$' + ', -', fontsize = 16)
+    ax1.set_ylabel(r'$F_{y}$ $\mathbf{Residual}$ $\mathbf{Error}$ ($\epsilon$)' + ', N', fontsize = 16)
+    handles1, labels = ax1.get_legend_handles_labels()
+
+    ax2 = fig.add_subplot(gs[:, 1])
+    ax2.plot(lag, ar, color = 'k', alpha = 0.8)
+    prettifyAxis(ax2)
+    ax2.set_xlabel(r'$\mathbf{Lag}$' + ', -', fontsize = 16)
+    ax2.set_ylabel(r'$\mathbf{Autocorrelation}$ $of$ $\mathbf{\epsilon}$' + ', -', fontsize = 16)
+    handles2, labels = ax2.get_legend_handles_labels()
+
+    ax3_0 = fig.add_subplot(gs[:, 2])
+
+
+    add_break = False
+
+    coeffs = np.abs(np.array(mdl.TrainedModel['Model']['Parameters']).reshape(coeffIndex.shape))
+    relative_mag = np.array(CV).reshape(coeffIndex.shape)/coeffs
+    if np.nanmax(relative_mag) < 0.025:
+        ymax = 1.1*np.nanmax(coeffs)
+        break_point = 1.1*np.nanmax(np.array(CV).reshape(coeffIndex.shape))
+        ax3_1_lims = [0, break_point]
+        ax3_2_lims = [1.1*break_point, ymax]
+        add_break = True
+
+
+    if add_break:
+        ax3_1 = fig.add_subplot(gs[2, 2], sharex = ax3_0)
+        ax3_2 = fig.add_subplot(gs[:2, 2], sharex = ax3_0)
+
+        # ind = np.array(CV).reshape(coeffIndex.shape)/np.abs(np.array(mdl.TrainedModel['Model']['Parameters']).reshape(coeffIndex.shape))*100
+        ax3_1.bar(coeffIndex, np.abs(np.array(mdl.TrainedModel['Model']['Parameters']).reshape(coeffIndex.shape)), color=myGreen, label='Model coefficients')
+        ax3_2.bar(coeffIndex, np.abs(np.array(mdl.TrainedModel['Model']['Parameters']).reshape(coeffIndex.shape)), color=myGreen, label='Model coefficients')
+        ax3_1.bar(coeffIndex, np.array(CV).reshape(coeffIndex.shape), color=myVelvet, label='Coefficient variance')
+        ax3_1.set_ylim(ax3_1_lims)
+        ax3_2.set_ylim(ax3_2_lims)
+        ax3_1.tick_params(axis='y', direction='in')
+        ax3_2.tick_params(which = 'both', direction = 'in')
+        ax3_1.set_xticks(ticks=coeffIndex)
+        ax3_1.set_xticklabels(labels=[r'$\xi$' + f'{n}' for n in coeffIndex])
+        ax3_2.spines['bottom'].set_visible(False)
+        ax3_1.spines['top'].set_visible(False)
+        ax3_1.tick_params(labeltop=False)  # Don't show top ticks
+        ax3_2.xaxis.tick_bottom()
+        ax3_1.set_xlabel(r'$\mathbf{Regressor}$' + ', -', fontsize = 16)
+        ax3_0.set_ylabel(r'$\mathbf{Coefficient \quad Magnitude}$' + ', -', fontsize = 16, labelpad = 42)
+        handles3, labels = ax3_1.get_legend_handles_labels()
+        handles = handles1 + handles2 + handles3
+
+        ax3_0.tick_params(which='both', direction = 'in')
+        ax3_0.spines['bottom'].set_visible(False)
+        ax3_0.spines['top'].set_visible(False)
+        ax3_0.spines['left'].set_visible(False)
+        ax3_0.spines['right'].set_visible(False)
+        ax3_0.set_yticklabels([])
+        plt.setp(ax3_0.get_yticklabels(), visible = False)
+        ax3_0.get_xaxis().set_visible(False)
+        ax3_2.get_xaxis().set_visible(False)
+
+    else:
+        ax3_0.bar(coeffIndex, np.abs(np.array(mdl.TrainedModel['Model']['Parameters']).reshape(coeffIndex.shape)), color=myGreen, label='Model coefficients')
+        ax3_0.bar(coeffIndex, np.array(CV).reshape(coeffIndex.shape), color=myVelvet, label='Coefficient variance')
+        ax3_0.tick_params(which = 'both', direction = 'in')
+        ax3_0.set_xticks(ticks=coeffIndex)
+        ax3_0.set_xticklabels(labels=[r'$\xi$' + f'{n}' for n in coeffIndex])
+        ax3_0.set_xlabel(r'$\mathbf{Regressor}$' + ', -', fontsize = 16)
+        ax3_0.set_ylabel(r'$\mathbf{Coefficient \quad Magnitude}$' + ', -', fontsize = 16)
+        handles3, labels = ax3_0.get_legend_handles_labels()
+        handles = handles1 + handles2 + handles3
+
+
+    lgd = ax1.legend(handles=handles, fontsize = 12,
+                bbox_to_anchor=(0, 1.02, 3.75, 0.2), loc="lower left", mode="expand", ncol=2,  labelspacing = 0.8,  borderaxespad=0, handlelength = 3, columnspacing=1)
+    lgd._legend_box.align = "left"
+
+
+    plt.subplots_adjust(
+    top=0.857,
+    bottom=0.119,
+    left=0.069,
+    right=0.99,
+    hspace=0.241,
+    wspace=0.38
+    )
+
+    if add_break:
+        # Draw consistent diagonal breaks using figure coordinates
+        d = 0.015  # Diagonal size
+        kwargs = dict(transform=fig.transFigure, color='k', clip_on=False, linewidth=1.5)
+
+        # Get positions of the axes in figure coordinates AFTER layout adjustment
+        ax1_pos = ax3_2.get_position()
+        ax2_pos = ax3_1.get_position()
+
+        # Draw break marks between the two plots using Line2D
+        # Top diagonal lines on ax2
+        line1 = mlines.Line2D([ax2_pos.x0 - d/2, ax2_pos.x0 + d/2], [ax2_pos.y1 - d/2, ax2_pos.y1 + d/2], **kwargs)
+        line2 = mlines.Line2D([ax2_pos.x1 - d/2, ax2_pos.x1 + d/2], [ax2_pos.y1 - d/2, ax2_pos.y1 + d/2], **kwargs)
+
+        # Bottom diagonal lines on ax1
+        line3 = mlines.Line2D([ax1_pos.x0 -d/2, ax1_pos.x0 + d/2], [ax1_pos.y0 - d/2, ax1_pos.y0 + d/2], **kwargs)
+        line4 = mlines.Line2D([ax1_pos.x1 - d/2, ax1_pos.x1 + d/2], [ax1_pos.y0 - d/2, ax1_pos.y0 + d/2], **kwargs)
+
+        # Add lines to the figure
+        fig.lines.extend([line1, line2, line3, line4])
+
+    return fig
+    

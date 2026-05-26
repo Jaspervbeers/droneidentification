@@ -2,6 +2,7 @@ import os
 from scipy.signal import find_peaks
 import pandas as pd
 import numpy as np
+import math
 from scipy.interpolate import interp1d
 import json
 
@@ -149,8 +150,17 @@ def import_OB(rowIdx, logFile, g=9.81, doCGCorrection = True, useOBAttitude = Fa
 
         droneParams.update({'g':g})
 
-        cg_xy = quadrotorFM.findCG_xy_omegaMethod(Data, droneParams, cutoff = 2)
-        cg = np.hstack((cg_xy, 0))
+        if "IMU to cg offset" in droneParams.keys():
+            cg = np.array([float(droneParams['IMU to cg offset']['x']), 
+                           float(droneParams['IMU to cg offset']['y']),
+                           float(droneParams['IMU to cg offset']['z'])])
+            if droneParams["IMU to cg offset"]["do estimation"]:
+                cg_xy = quadrotorFM.findCG_xy_omegaMethod(Data, droneParams, cutoff = 2)
+            cg = np.hstack((cg_xy, cg[2]))
+        else:
+            cg_xy = quadrotorFM.findCG_xy_omegaMethod(Data, droneParams, cutoff = 2)
+            cg = np.hstack((cg_xy, 0))
+        
         r = np.vstack((cg,)*len(Data))
         accIMU = Data[['ax', 'ay', 'az']].to_numpy()
         rates = Data[['p', 'q', 'r']].to_numpy()

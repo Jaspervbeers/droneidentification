@@ -16,8 +16,8 @@ import sys
 # ================================================================================================================================ #
 # Local Imports
 # ================================================================================================================================ #
-from processing import normalization, partitioning, utility, quadrotorFM
-from common import plotter, angleFuncs, solvers
+from processing import normalization, partitioning, utility, quadrotorFM, iodHelper
+from common import plotter, angleFuncs
 
 # This package relies on the system identification pipeline (sysidpipeline). 
 with open('relativeImportLocations.json', 'r') as f:
@@ -131,23 +131,25 @@ def printPIs(PIDict):
         thresh = 0.05
         if PIDict[force]['PICP'] <= (PIConfidenceLevel - thresh)*100:
             print(f'[ WARNING ] \t Probability Coverage for {force} <= {np.around(PIConfidenceLevel-thresh, 1)*100}, model may be overfitting or validation data contains unobserved dynamics.')
-            print('[ INFO ] \t {:<30} {:>6}'.format('Probability Coverage (Train):', globals()[f'{force}Out']['_PI_breakdown']['PICP_train']))
-            print('[ INFO ] \t {:<30} {:>6}'.format('Probability Coverage (Test):', globals()[f'{force}Out']['_PI_breakdown']['PICP_test']))
-            if globals()[f'{force}Out']['_PI_breakdown']['PICP_test'] <= globals()[f'{force}Out']['_PI_breakdown']['PICP_train'] - thresh*100:
+            print('[ INFO ] \t {:<30} {:>6}'.format('Probability Coverage (Train):', globals()[f'{force}Valid']['_PI_breakdown']['PICP_train']))
+            print('[ INFO ] \t {:<30} {:>6}'.format('Probability Coverage (Test):', globals()[f'{force}Valid']['_PI_breakdown']['PICP_test']))
+            if globals()[f'{force}Valid']['_PI_breakdown']['PICP_test'] <= globals()[f'{force}Valid']['_PI_breakdown']['PICP_train'] - thresh*100:
                 print('[ WARNING ] \t Given difference in probability coverage between training and test data, model overfits or test data ill-constructed')
             else:
                 print('[ WARNING ] \t Training and test probability coverage do not suggest an issue, issues likely lie with validation data')
     return None
 
 
-def makePolyModel(Data, TargetID, polys, fixed, partitionIdxs, normalizer, cap = 15, bias = True):
+def makePolyModel(Data, TargetID, polys, fixed, fixed_coeffs, partitionIdxs, normalizer, cap = 15, bias = True):
     train_idx = partitionIdxs[0]
     test_idx = partitionIdxs[1]
 
     Model_Poly = SysID.Model('Stepwise_Regression')
-    Model_Poly.compile(Data.loc[train_idx, :].copy(), polys, fixed, includeBias=bias)
-    Model_Poly.train(Data.loc[train_idx, :].copy(), Data.loc[train_idx, TargetID].copy(), stop_criteria='PSE', k_lim =cap, force_k_lim = True)
+    Model_Poly.compile(Data.loc[train_idx, :].copy(), polys, fixed, includeBias=bias, fixed_coefficients = fixed_coeffs)
+    Model_Poly.train(Data.loc[train_idx, :].copy(), Data.loc[train_idx, TargetID].copy(), stop_criteria='R2', k_lim =cap, force_k_lim = True)
     PredictionData = ModelPredictions(Model_Poly, Data, test_idx, train_idx, normalizer = normalizer)
+
+    Model_Poly.summary()
 
     print('[ INFO ] Model performance:')
     print('[ INFO ] \t {:<25}   {:>20}'.format('RMSE w.r.t training data', Model_Poly._RMSE( Data.loc[train_idx, TargetID].to_numpy(), PredictionData.prediction_Train)))
@@ -157,7 +159,7 @@ def makePolyModel(Data, TargetID, polys, fixed, partitionIdxs, normalizer, cap =
     return Model_Poly, PredictionData
 
 
-def identifyPolyModel(data, targetColumn, polynominalCandidates, fixedRegressors, trainingIndices, testingIndices, excitationIndices, normalizer = None, regressorCap = 15, bias = True):
+def identifyPolyModel(data, targetColumn, polynominalCandidates, fixedRegressors, fixedCoeffs, trainingIndices, testIdx, excitationIndices, normalizer = None, regressorCap = 15, bias = True):
     # Isolate excitations
     if len(excitationIndices):
         trainIdx = np.intersect1d(trainingIndices, excitationIndices)
@@ -165,99 +167,114 @@ def identifyPolyModel(data, targetColumn, polynominalCandidates, fixedRegressors
         trainIdx = trainingIndices
 
     # Identify model
-    model, predictions = makePolyModel(data, targetColumn, polynominalCandidates, fixedRegressors, [trainIdx, testingIndices], normalizer = normalizer, cap = regressorCap, bias = bias)
+    model, predictions = makePolyModel(data, targetColumn, polynominalCandidates, fixedRegressors, fixed_coeffs, [trainIdx, testIdx], normalizer = normalizer, cap = regressorCap, bias = bias)
     return model, predictions
 
 
-def savePolyModel(modelID, modelFolder, metadata, model, predictions, data, targetColumn, trainingIndices, testingIndices, segregatedIdxs, segregatedVIdxs, excitationIndices, PIConfidenceLevel, predictionIntervalDict, normalizer = None, DEBUG_FLAG = False, SAVE_INDICES = False):
+def validatePolyModel(model, predictions, data, targetColumn, trainingIndices, testIdx, segregatedVIdxs, excitationIndices, PIConfidenceLevel, predictionIntervalDict, normalizer = None, DEBUG_FLAG = False, SAVE_INDICES = None):
     # Isolate excitations
     if len(excitationIndices):
         trainIdx = np.intersect1d(trainingIndices, excitationIndices)
     else:
         trainIdx = trainingIndices
-    
     targets = data[targetColumn].to_numpy().reshape(-1)
     if normalizer is not None:
         targets = targets * normalizer
 
     output = {}
-
     # Check for over-fitting between training and test rmse
+    RMSES = {}
     RMSE_train = model._RMSE( data.loc[trainIdx, targetColumn].to_numpy(), predictions.prediction_Train)
-    RMSE_test = model._RMSE( data.loc[testingIndices, targetColumn].to_numpy(), predictions.prediction_Test)
+    RMSE_test = model._RMSE( data.loc[testIdx, targetColumn].to_numpy(), predictions.prediction_Test)
     RMSEdiff_train = 100 - RMSE_train/RMSE_test*100
+    RMSES.update({'train':RMSE_train})
+    RMSES.update({'test':RMSE_test})
+    output.update({'RMSE':RMSES})
     print(f'[ INFO ] Relative difference in RMSE between TEST and TRAIN ({targetColumn}): {RMSEdiff_train} %')
     # NOTE: Not abs(RMSE) here since we care more about situations where TEST > TRAIN. While -RMSEdiff can be a problem, it is highly subject to differences in magnitude between the data sets
     if RMSEdiff_train > 10:
-        print(f'[ WARNING ] The TEST RMSE is over 10% different than the TRAIN RMSE. The {targetColumn} model may be OVERFITTING. Consider removing regressors.')
+        print(f'[ WARNING ] The TEST RMSE is over 10% larger than the TRAIN RMSE. The {targetColumn} model may be OVERFITTING. Consider removing regressors.')
         validationIdxs = None
         if len(segregatedVIdxs):
             validationIdxs = []
             # Highlight validation plots in figures
             for sVIdx in segregatedVIdxs:
                 validationIdxs = validationIdxs + list(np.arange(sVIdx[0], sVIdx[1]))
-        figValid = plotter.ValidationRMSEExplorer(data, model, targetColumn, predictions, validationIdxs, trainIdx, testingIndices)
+        figValid = plotter.ValidationRMSEExplorer(data, model, targetColumn, predictions, validationIdxs, trainIdx, testIdx)
         output.update({'figValidCheck':figValid})
 
     # Get prediction interval metrics 
     PICP, MPIW = utility.qualityPI(targets, predictions.prediction, predictions.predictionVariance, conf=PIConfidenceLevel)
     PICP_tr, MPIW_tr = utility.qualityPI(targets[trainIdx], predictions.prediction_Train, predictions.predictionVariance_Train, conf=PIConfidenceLevel)
-    PICP_te, MPIW_tr = utility.qualityPI(targets[testingIndices], predictions.prediction_Test, predictions.predictionVariance_Test, conf=PIConfidenceLevel)
-    predictionIntervalDict.update({targetColumn:{'PICP':PICP, 'MPIW':MPIW}})
+    PICP_te, MPIW_tr = utility.qualityPI(targets[testIdx], predictions.prediction_Test, predictions.predictionVariance_Test, conf=PIConfidenceLevel)
+    predictionIntervalDict.update({targetColumn:{'PICP':float(PICP), 'MPIW':float(MPIW)}})
     output.update({'prediction interval metrics':predictionIntervalDict})
     output.update({'_PI_breakdown':{'PICP_train':PICP_tr, 'PICP_test':PICP_te}})
+
+    # Estimate intended operating region (iod)
+    print('[ INFO ] Estimating intended operating domain (IOD)...')
+    IOD = iodHelper.estimate_iod(model, data, data[targetColumn], PI_conf=PIConfidenceLevel)
+    min_ratio_cvx = 1
+    for reg, r in IOD['convex'].items():
+        if r['ratio'] < min_ratio_cvx:
+            min_ratio_cvx = r['ratio']
+    print('[ INFO ]\t' + f'ratio of total data in CONVEX hull IOD: {min_ratio_cvx:.4f}')
+    min_ratio_ccv = 1
+    for reg, r in IOD['concave'].items():
+        if r['ratio'] < min_ratio_ccv:
+            min_ratio_ccv = r['ratio']
+    print('[ INFO ]\t' + f'ratio of total data in CONCAVE hull IOD: {min_ratio_ccv:.4f}')
+    output.update({'IOD':IOD})
+
+    if DEBUG_FLAG:
+        output.update({'model':model})
+        output.update({'predictions':predictions})
+    if SAVE_INDICES is not None:
+        with open(os.path.join(SAVE_INDICES, 'IDX.pkl'), 'wb') as f:
+            pkl.dump({'train':trainIdx, 'test':testIdx}, f)
+    return output
+
+
+def makePlots(modelID, model, predictions, data, targetColumn, RMSEs, trainIdx, testIdx, saveModelDir):
+    output = {}
+    targets = data[targetColumn].to_numpy().reshape(-1)
     # Plot predictions
     fig = plotter.plotModelWithPI(targets, (predictions.prediction,), (predictions.predictionVariance,), labels = (targetColumn,), 
                                   ylabel = r'$\mathbf{Force}$, N' if targetColumn.startswith('F') else r'$\mathbf{Moment}$, Nm', 
                                   xlabel = r'$\mathbf{Sample}$, -', confidence = PIConfidenceLevel, returnFig=True)
-
     # Segment plots based on end of flights 
     ax = fig.axes[0]
     handles, _ = ax.get_legend_handles_labels()
     for sIdx in segregatedIdxs:
-        plotter.addVLINE(ax, sIdx, -1000, 1000, color = '#e67d0a')
-    plotter.addLegendLine(handles, label = 'End of flight', color = '#e67d0a')
-
+        # plotter.addVLINE(ax, sIdx, -1000, 1000, color = '#e67d0a')
+        plotter.addVLINE(ax, sIdx, ax.get_ylim()[0], ax.get_ylim()[1], color = 'mediumvioletred')
+    plotter.addLegendLine(handles, label = 'End of flight', color = 'mediumvioletred')
+    RMSE_test = RMSEs['test']
+    RMSE_train = RMSEs['train']
     if len(segregatedVIdxs):
         validationIdxs = []
         # Highlight validation plots in figures
         for sVIdx in segregatedVIdxs:
-            plotter.addXVSPAN(ax, sVIdx[0], sVIdx[1], color = 'orange', alpha = 0.2)
+            plotter.addXVSPAN(ax, sVIdx[0], sVIdx[1], color = 'mediumvioletred', alpha = 0.2)
             validationIdxs = validationIdxs + list(np.arange(sVIdx[0], sVIdx[1]))
-        plotter.addLegendPatch(handles, label = 'Validation flight', color = 'orange', alpha = 0.2)
-
+        plotter.addLegendPatch(handles, label = 'Validation flight', color = 'mediumvioletred', alpha = 0.2)
         # Check for over-fitting through test vs validation rmse
         validationRMSE = model._RMSE(data[targetColumn].to_numpy()[validationIdxs], predictions.prediction[validationIdxs])
-        print('[ INFO ] \t {:<25}   {:>20}'.format('RMSE w.r.t VALIDATION data', validationRMSE))
         RMSEdiff = 100 - validationRMSE/RMSE_test*100
+        RMSEdiff_train = 100 - validationRMSE/RMSE_train*100
         print(f'[ INFO ] Relative difference in RMSE between TEST and VALIDATION ({targetColumn}): {RMSEdiff} %')
+        print(f'[ INFO ] Relative difference in RMSE between TRAIN and VALIDATION ({targetColumn}): {RMSEdiff_train} %')
+        print('[ INFO ] \t {:<25}   {:>20}'.format('RMSE w.r.t VALIDATION data', validationRMSE))
         # print(f'[ INFO ] The {targetColumn} model TEST RMSE {"underestimates" if RMSEdiff < 0 else "overestimates"} the VALIDATION RMSE by {np.abs(RMSEdiff)} %')
         # NOTE: Not abs(RMSE) here since we care more about situations where VALID > TEST. While +RMSEdiff can be a problem, it is highly subject to differences in magnitude between the data sets
-        if RMSEdiff < -10:
-            print(f'[ WARNING ] The TEST RMSE is over 10% different than the VALIDATION RMSE. The {targetColumn} model may be OVERFITTING. Consider removing regressors.')
+        if RMSEdiff < -10 and RMSEdiff_train < -10:
+            print(f'[ WARNING ] The VALIDATION RMSE is over 10% different than the both TEST and TRAIN RMSE. The {targetColumn} model may be OVERFITTING. Consider removing regressors.')
             # Do not plot if plot already created in train vs test check! 
             if 'figValidCheck' not in output.keys():
-                figValid = plotter.ValidationRMSEExplorer(data, model, targetColumn, predictions, validationIdxs, trainIdx, testingIndices)
+                figValid = plotter.ValidationRMSEExplorer(data, model, targetColumn, predictions, validationIdxs, trainIdx, testIdx)
                 output.update({'figValidCheck':figValid})
-
     ax.legend(handles=handles)
     output.update({'fig':fig})
-
-    # Save model
-    saveModelDir = os.path.join(modelFolder, modelID, targetColumn)
-    if not os.path.isdir(saveModelDir):
-        os.makedirs(saveModelDir)
-    with open(os.path.join(saveModelDir, 'processingMetadata.json'), 'w') as f:
-        json.dump(metadata, f, indent = 4)
-    model.save(saveModelDir, saveTrainingData = True)
-
-    if SAVE_INDICES:
-        with open(os.path.join(saveModelDir, 'IDX.pkl'), 'wb') as f:
-            pkl.dump({'train':trainIdx, 'test':testingIndices}, f)
-    if DEBUG_FLAG:
-        output.update({'model':model})
-        output.update({'predictions':predictions})
-
     # Save figures 
     print('[ INFO ] Saving figures...')
     fig.savefig(os.path.join(saveModelDir, f'figure_{modelID}_{targetColumn}.pdf'))
@@ -267,14 +284,43 @@ def savePolyModel(modelID, modelFolder, metadata, model, predictions, data, targ
         figValid.savefig(os.path.join(saveModelDir, f'validationCheck_{modelID}_{targetColumn}.png'), dpi = 600)
     return output
 
+
+def savePolyModel(model, saveModelDir, extra = {}):
+    # Save model
+    print('[ INFO ] Saving model...')
+    if not os.path.isdir(saveModelDir):
+        os.makedirs(saveModelDir)
+    with open(os.path.join(saveModelDir, 'processingMetadata.json'), 'w') as f:
+        json.dump(metadata, f, indent = 4)
+    saveTrainingData = True
+    if 'save training data' in metadata['identification parameters'].keys():
+        saveTrainingData = metadata['identification parameters']['save training data']
+    model.save(saveModelDir, saveTrainingData = saveTrainingData)
+    if 'IOD' in extra:
+        print('[ INFO ] Saving IOD hulls...')
+        # Saving iod indices and all indices (used for ratios)
+        with open(f'{saveModelDir}/IOD_idxs.pkl', 'wb') as f:
+            pkl.dump(extra['IOD']['indices'], f)
+        # Save IOD hulls
+        with open(f'{saveModelDir}/IOD_convex.json', 'w') as f:
+            json.dump(extra['IOD']['convex'], f, indent = 4)
+        with open(f'{saveModelDir}/IOD_concave.json', 'w') as f:
+            json.dump(extra['IOD']['concave'], f, indent = 4)
+    return None
+
+
 # ================================================================================================================================ #
 # Processing
 # ================================================================================================================================ #
 '''
 Extract & Define processing parameters
 '''
-# TODO: Save this config file as metadata
-with open('identificationConfig.json', 'r') as f:
+if len(sys.argv) > 1:
+    configfile = sys.argv[1]
+else:
+    configfile = 'identificationConfig.json'
+
+with open(configfile, 'r') as f:
     identificationConfig = json.load(f)
 
 # Extract loggin file information
@@ -361,7 +407,7 @@ for i in range(len(rowIdxs)-1):
 
 # Extract quadrotor configuration
 r_sign = {'CCW':-1, 'CW':1}
-droneParams, rotorConfig, rotorDir, idleRPM = utility.extractConfig(rowIdxs[0], log)
+droneParams, rotorConfig, rotorDir, idleRPM = utility.extractConfig(rowIdxs[0], log, curdir=fileLogDir)
 droneParams.update({'rho':1.225})
 g = 9.81
 droneParams.update({'g':g})
@@ -372,16 +418,18 @@ minRPM = {quadrotorName:float(idleRPM)}
 print('[ INFO ] IDENTIFYING MODELS FOR:')
 print('[ INFO ] \t {}'.format(saveModelID))
 
-savePath = checkPath(modelDir, saveModelID)
+if identificationConfig['skip check path']:
+    savePath = os.path.join(modelDir, saveModelID)
+else:
+    savePath = checkPath(modelDir, saveModelID)
 
 if not os.path.isdir(savePath):
     os.makedirs(savePath)
 
 # Create/Import prediction interval performance metrics
-if os.path.isfile(os.path.join(savePath, 'predictionIntervals.pkl')):
-    with open(os.path.join(savePath, 'predictionIntervals.pkl'), 'rb') as f:
-        PIresults = pkl.load(f)
-        f.close()    
+if os.path.isfile(os.path.join(savePath, 'PIresults.json')):
+    with open(os.path.join(savePath, 'PIresults.json'), 'r') as f:
+        PIresults = json.load(f)
 else:
     PIresults = {}
 
@@ -702,19 +750,20 @@ if len(validationRows):
 '''
 Isolate system identification manoeuvres
 '''
+# isolationMethods = {'Fx':"Variance", 'Fy':"Variance", 'Fz':"Variance",
+#                     'Mx':"Peak", 'My':"Peak", 'Mz':"Peak"}
 isolationMethods = {'Fx':"Variance", 'Fy':"Variance", 'Fz':"Variance",
                     'Mx':"Peak", 'My':"Peak", 'Mz':"Peak"}
 if os.path.isfile(os.path.join(savePath, 'excitationIdxs.pkl')):
     with open(os.path.join(savePath, 'excitationIdxs.pkl'), 'rb') as f:
         excitationIdxs = pkl.load(f)
-        f.close()
 else:
     excitationIdxs = {'Fx':[], 'Fy':[], 'Fz':[], 'Mx':[], 'My':[], 'Mz':[]}
 if isolateExcitations:
     print('[ INFO ] Isolating system excitations')
     _excitationIdxs = partitioning.getSystemExcitations(excitationIdxs, DataList, locals(), isolationMethods, spread = excitationSpread,
-                                            variance_threshold=excitationThreshold, height_threshold = 0.5*excitationThreshold, 
-                                            prominence_threshold = 0.9*excitationThreshold)
+                                            variance_threshold=3*excitationThreshold, height_threshold = excitationThreshold, 
+                                            prominence_threshold = 2*excitationThreshold)
     excitationIdxs.update({k:v for k, v in _excitationIdxs.items()})
 
     if showExcitations:
@@ -722,6 +771,9 @@ if isolateExcitations:
             if identificationParams[f'identify {key.lower()}']:
                 _fig = plotter.plotExcitations(key, excitationIdxs, ProcessedData, segregatedIdxs=segregatedIdxs)
         plt.show()
+
+    with open(os.path.join(savePath, 'excitationIdxs.pkl'), 'wb') as f:
+        pkl.dump(excitationIdxs, f)
 
 '''
 Split into training and testing subsets
@@ -739,46 +791,32 @@ else:
         startIdx = 0
         remainder = 0
         for i, _D in enumerate(DataList):
-            if jointTimeHorizon is not None:
-                remainder = len(_D) % jointTimeHorizon
-            [_, _idx_train], [_, _idx_test] = partitioning.PartitionData(_D.to_numpy(), partitionRatio, Method='Random', batch_size = jointTimeHorizon)
             if rowIdxs[i] not in validationRows:
+                if jointTimeHorizon is not None:
+                    remainder = len(_D) % jointTimeHorizon
+                [_, _idx_train], [_, _idx_test] = partitioning.PartitionData(_D.to_numpy(), partitionRatio, Method='Random', batch_size = jointTimeHorizon)
                 idx_train += list(_idx_train + startIdx)
-            else:
-                _idx_test = np.arange(0, len(_D) - remainder, 1)
-            idx_test += list(_idx_test + startIdx)
+                idx_test += list(_idx_test + startIdx)
             startIdx += len(_D)-remainder
             # Trim _D to be compatible with jointTimeHorizon
             DataList[i] = _D.iloc[:len(_D)-remainder, :]
-
         idx_train = np.array(idx_train)
-        idx_test = np.array(idx_test)    
+        idx_test = np.array(idx_test)
     else:
         startIdx = 0
-        remainder = 0
         for i, _D in enumerate(DataList):
-            if jointTimeHorizon is not None:
-                remainder = len(_D) % jointTimeHorizon
-            if remainder != 0:
-                print('[ WARNING ] Data (N = {}) could not be evenly split into batches of size {}. Trimming last remaining points (= {} samples)'.format(_D.shape[0], jointTimeHorizon, remainder))
-                Data = Data[:-remainder]
-                Data = Data.reshape(-1, jointTimeHorizon, *_D.shape[1:])
-                Mask = np.arange(0, _D.shape[0]-remainder).reshape(-1, jointTimeHorizon)
             if rowIdxs[i] not in validationRows:
-                idx_train += list(np.arange(0, len(_D) - remainder, 1) + startIdx)
-                _idx_test = []
-            else:
-                _idx_test = np.arange(0, len(_D) - remainder, 1)
-            idx_test += list(np.array(_idx_test) + startIdx)
-            startIdx += len(_D)-remainder
-            # Trim _D to be compatible with jointTimeHorizon
-            DataList[i] = _D.iloc[:len(_D)-remainder, :]
-
+                _idx_train = np.arange(0, len(_D))
+                idx_train += list(_idx_train + startIdx)
+            startIdx += len(_D)
         idx_train = np.array(idx_train)
-        idx_test = np.array(idx_test) 
+        idx_test = np.array(idx_test)
+
     # Save train and test indices
     with open(os.path.join(savePath, 'trainAndTestIndices.pkl'), 'wb') as f:
         pkl.dump({'Training indices':idx_train,'Test indices':idx_test}, f)
+
+
 
 
 '''
@@ -803,66 +841,106 @@ metadata.update({'identification parameters':identificationParams})
 
 metadata.update({'additional info':{'droneMass':droneMass, 'hover omega (rad/s)':np.nanmean(wHovers), 'hover omega (eRPM)':np.nanmean(wHovers)/(2*np.pi/60)}})
 
-
+IODForces = []
+IODMoments = []
 if identifyFx:
     print('\n\n[ INFO ] Identifying polynomial model for Fx...')
+    mdlSavePath = os.path.join(modelDir, saveModelID, 'Fx')
+    if not os.path.exists(mdlSavePath):
+        os.makedirs(mdlSavePath)
     polys_Fx = polyData['Fx']['candidates']
     fixed_Fx = polyData['Fx']['fixed']
+    fixed_coeffs = {}
+    if 'fixed coefficient map' in polyData['Fx'].keys():
+        fixed_coeffs = polyData['Fx']['fixed coefficient map']
     
-    FxModel, FxPreds = identifyPolyModel(ProcessedData, 'Fx', polys_Fx, fixed_Fx, idx_train, idx_test, excitationIdxs['Fx'],
+    FxModel, FxPreds = identifyPolyModel(ProcessedData, 'Fx', polys_Fx, fixed_Fx, fixed_coeffs, idx_train, idx_test, excitationIdxs['Fx'],
                                 normalizer = ProcessedData['F_den'].to_numpy().reshape(-1), regressorCap=polyModelCap, bias = addBiasFx)
-
-    FxOut = savePolyModel(saveModelID, modelDir, metadata, FxModel, FxPreds, ProcessedData, 'Fx', idx_train, idx_test, segregatedIdxs, segregatedVIdxs,
+    FxValid = validatePolyModel(FxModel, FxPreds, ProcessedData, 'Fx', idx_train, idx_test, segregatedVIdxs,
                                 excitationIdxs['Fx'], PIConfidenceLevel, PIresults, normalizer = ProcessedData['F_den'].to_numpy().reshape(-1),
-                                DEBUG_FLAG=DEBUG_FLAG, SAVE_INDICES=SAVE_INDICES)
+                                DEBUG_FLAG=DEBUG_FLAG, SAVE_INDICES=mdlSavePath)
+    FxOut = makePlots(saveModelID, FxModel, FxPreds, ProcessedData, 'Fx', FxValid['RMSE'], idx_train, idx_test, mdlSavePath)
+    savePolyModel(FxModel, mdlSavePath, extra=FxValid)
 
-
-    PIresults = FxOut['prediction interval metrics']
+    PIresults = FxValid['prediction interval metrics']
     figFx = FxOut['fig']
     ax = figFx.axes[0]
     ax.set_ylabel(r'$\mathbf{Force, \quad F_{x}}\quad [N]$', fontsize = 16)
     ax.set_xlabel(r'$\mathbf{Sample}\quad [-]$', fontsize = 16)
+    if 'plot limits' in identificationConfig:
+        if 'Fx' in identificationConfig['plot limits'].keys():
+            ax.set_xlim(identificationConfig['plot limits']['Fx']['xlims'])
+            ax.set_ylim(identificationConfig['plot limits']['Fx']['ylims'])
+
+    IODForces.append('Fx')
 
 
 
 if identifyFy:
     print('\n\n[ INFO ] Identifying polynomial model for Fy...')
+    mdlSavePath = os.path.join(modelDir, saveModelID, 'Fy')
+    if not os.path.exists(mdlSavePath):
+        os.makedirs(mdlSavePath)
     polys_Fy = polyData['Fy']['candidates']
     fixed_Fy = polyData['Fy']['fixed']
+    fixed_coeffs = {}
+    if 'fixed coefficient map' in polyData['Fy'].keys():
+        fixed_coeffs = polyData['Fy']['fixed coefficient map']
     
-    FyModel, FyPreds = identifyPolyModel(ProcessedData, 'Fy', polys_Fy, fixed_Fy, idx_train, idx_test, excitationIdxs['Fy'], 
+    
+    FyModel, FyPreds = identifyPolyModel(ProcessedData, 'Fy', polys_Fy, fixed_Fy, fixed_coeffs, idx_train, idx_test, excitationIdxs['Fy'],
                                 normalizer = ProcessedData['F_den'].to_numpy().reshape(-1), regressorCap=polyModelCap, bias = addBiasFy)
-    
-    FyOut = savePolyModel(saveModelID, modelDir, metadata, FyModel, FyPreds, ProcessedData, 'Fy', idx_train, idx_test, segregatedIdxs, segregatedVIdxs,
+    FyValid = validatePolyModel(FyModel, FyPreds, ProcessedData, 'Fy', idx_train, idx_test, segregatedVIdxs,
                                 excitationIdxs['Fy'], PIConfidenceLevel, PIresults, normalizer = ProcessedData['F_den'].to_numpy().reshape(-1),
-                                DEBUG_FLAG=DEBUG_FLAG, SAVE_INDICES=SAVE_INDICES)
+                                DEBUG_FLAG=DEBUG_FLAG, SAVE_INDICES=mdlSavePath)
+    FyOut = makePlots(saveModelID, FyModel, FyPreds, ProcessedData, 'Fy', FyValid['RMSE'], idx_train, idx_test, mdlSavePath)
+    savePolyModel(FyModel, mdlSavePath, extra=FyValid)
 
-    PIresults = FyOut['prediction interval metrics']                              
+    PIresults = FyValid['prediction interval metrics']                              
     figFy = FyOut['fig']
     ax = figFy.axes[0]
     ax.set_ylabel(r'$\mathbf{Force, \quad F_{y}}\quad [N]$', fontsize = 16)
-    ax.set_xlabel(r'$\mathbf{Sample}\quad [-]$', fontsize = 16)    
+    ax.set_xlabel(r'$\mathbf{Sample}\quad [-]$', fontsize = 16)
+    if 'plot limits' in identificationConfig:
+        if 'Fy' in identificationConfig['plot limits'].keys():
+            ax.set_xlim(identificationConfig['plot limits']['Fy']['xlims'])
+            ax.set_ylim(identificationConfig['plot limits']['Fy']['ylims'])
+
+    IODForces.append('Fy')    
 
 
 
 if identifyFz:
-    print('\n\n[ INFO ] Identifying polynomial model for Fz...') 
+    print('\n\n[ INFO ] Identifying polynomial model for Fz...')
+    mdlSavePath = os.path.join(modelDir, saveModelID, 'Fz')
+    if not os.path.exists(mdlSavePath):
+        os.makedirs(mdlSavePath)
     polys_Fz = polyData['Fz']['candidates']
     fixed_Fz = polyData['Fz']['fixed']
+    fixed_coeffs = {}
+    if 'fixed coefficient map' in polyData['Fz'].keys():
+        fixed_coeffs = polyData['Fz']['fixed coefficient map']
+    
         
-    FzModel, FzPreds = identifyPolyModel(ProcessedData, 'Fz', polys_Fz, fixed_Fz, idx_train, idx_test, excitationIdxs['Fz'],
+    FzModel, FzPreds = identifyPolyModel(ProcessedData, 'Fz', polys_Fz, fixed_Fz, fixed_coeffs, idx_train, idx_test, excitationIdxs['Fz'],
                                 normalizer = ProcessedData['F_den'].to_numpy().reshape(-1), regressorCap=polyModelCap, bias = addBiasFz)
-
-    FzOut = savePolyModel(saveModelID, modelDir, metadata, FzModel, FzPreds, ProcessedData, 'Fz', idx_train, idx_test, segregatedIdxs, segregatedVIdxs,
+    FzValid = validatePolyModel(FzModel, FzPreds, ProcessedData, 'Fz', idx_train, idx_test, segregatedVIdxs,
                                 excitationIdxs['Fz'], PIConfidenceLevel, PIresults, normalizer = ProcessedData['F_den'].to_numpy().reshape(-1),
-                                DEBUG_FLAG=DEBUG_FLAG, SAVE_INDICES=SAVE_INDICES)
+                                DEBUG_FLAG=DEBUG_FLAG, SAVE_INDICES=mdlSavePath)
+    FzOut = makePlots(saveModelID, FzModel, FzPreds, ProcessedData, 'Fz', FzValid['RMSE'], idx_train, idx_test, mdlSavePath)
+    savePolyModel(FzModel, mdlSavePath, extra=FzValid)
 
 
-    PIresults = FzOut['prediction interval metrics']
+    PIresults = FzValid['prediction interval metrics']
     figFz = FzOut['fig']
     ax = figFz.axes[0]
     ax.set_ylabel(r'$\mathbf{Force, \quad F_{z}}\quad [N]$', fontsize = 16)
     ax.set_xlabel(r'$\mathbf{Sample}\quad [-]$', fontsize = 16)
+    if 'plot limits' in identificationConfig:
+        if 'Fz' in identificationConfig['plot limits'].keys():
+            ax.set_xlim(identificationConfig['plot limits']['Fz']['xlims'])
+            ax.set_ylim(identificationConfig['plot limits']['Fz']['ylims'])
+
 
     # Get simple model for T = -kappa * sum(w_i^2); useful for some controllers which assume affine systems
     _w_2_total = ProcessedData['w1']**2 + ProcessedData['w2']**2 + ProcessedData['w3']**2 + ProcessedData['w4']**2
@@ -873,26 +951,41 @@ if identifyFz:
 
     simpleModel.update({'kappaFz_w_2':float(kappaFz_w_2.__array__()[0][0])})
     simpleModel.update({'kappaFz_w':float(kappaFz_w.__array__()[0][0])})
+    IODForces.append('Fz')
 
 
 
 if identifyMx:
     print('\n\n[ INFO ] Identifying polynomial model for Mx...')
+    mdlSavePath = os.path.join(modelDir, saveModelID, 'Mx')
+    if not os.path.exists(mdlSavePath):
+        os.makedirs(mdlSavePath)
     polys_Mx = polyData['Mx']['candidates']
     fixed_Mx = polyData['Mx']['fixed']
-
-    MxModel, MxPreds = identifyPolyModel(ProcessedData, 'Mx', polys_Mx, fixed_Mx, idx_train, idx_test, excitationIdxs['Mx'],
-                                normalizer = ProcessedData['M_den'].to_numpy().reshape(-1), regressorCap=polyModelCap, bias = addBiasMx)
+    fixed_coeffs = {}
+    if 'fixed coefficient map' in polyData['Mx'].keys():
+        fixed_coeffs = polyData['Mx']['fixed coefficient map']
     
-    MxOut = savePolyModel(saveModelID, modelDir, metadata, MxModel, MxPreds, ProcessedData, 'Mx', idx_train, idx_test, segregatedIdxs, segregatedVIdxs,
+
+    MxModel, MxPreds = identifyPolyModel(ProcessedData, 'Mx', polys_Mx, fixed_Mx, fixed_coeffs, idx_train, idx_test, excitationIdxs['Mx'],
+                                normalizer = ProcessedData['M_den'].to_numpy().reshape(-1), regressorCap=polyModelCap, bias = addBiasMx)
+    MxValid = validatePolyModel(MxModel, MxPreds, ProcessedData, 'Mx', idx_train, idx_test, segregatedVIdxs,
                                 excitationIdxs['Mx'], PIConfidenceLevel, PIresults, normalizer = ProcessedData['M_den'].to_numpy().reshape(-1),
-                                DEBUG_FLAG=DEBUG_FLAG, SAVE_INDICES=SAVE_INDICES)
+                                DEBUG_FLAG=DEBUG_FLAG, SAVE_INDICES=mdlSavePath)
+    MxOut = makePlots(saveModelID, MxModel, MxPreds, ProcessedData, 'Mx', MxValid['RMSE'], idx_train, idx_test, mdlSavePath)
+    savePolyModel(MxModel, mdlSavePath, extra=MxValid)
+
  
-    PIresults = MxOut['prediction interval metrics']
+    PIresults = MxValid['prediction interval metrics']
     figMx = MxOut['fig']
     ax = figMx.axes[0]
     ax.set_ylabel(r'$\mathbf{Moment, \quad M_{x}}\quad [Nm]$', fontsize = 16)
     ax.set_xlabel(r'$\mathbf{Sample}\quad [-]$', fontsize = 16)
+    if 'plot limits' in identificationConfig:
+        if 'Mx' in identificationConfig['plot limits'].keys():
+            ax.set_xlim(identificationConfig['plot limits']['Mx']['xlims'])
+            ax.set_ylim(identificationConfig['plot limits']['Mx']['ylims'])
+
 
     # Get simple model for Mx = kappaMx * Up
     [kappaMx_w_2, _] = MxModel._techniqueModule._OLS(np.matrix(ProcessedData['U_p'][idx_train]).T, np.matrix(ProcessedData['Mx'][idx_train]).T, hasBias = False)
@@ -900,25 +993,39 @@ if identifyMx:
 
     simpleModel.update({'kappaMx_w_2':float(kappaMx_w_2.__array__()[0][0])})
     simpleModel.update({'kappaMx_w':float(kappaMx_w.__array__()[0][0])})
+    IODMoments.append('Mx')
 
 
 if identifyMy:
+    mdlSavePath = os.path.join(modelDir, saveModelID, 'My')
+    if not os.path.exists(mdlSavePath):
+        os.makedirs(mdlSavePath)
     print('\n\n[ INFO ] Identifying polynomial model for My...')
     polys_My = polyData['My']['candidates']
     fixed_My = polyData['My']['fixed']
-
-    MyModel, MyPreds = identifyPolyModel(ProcessedData, 'My', polys_My, fixed_My, idx_train, idx_test, excitationIdxs['My'],
-                                normalizer = ProcessedData['M_den'].to_numpy().reshape(-1), regressorCap=polyModelCap, bias = addBiasMy)
-
-    MyOut = savePolyModel(saveModelID, modelDir, metadata, MyModel, MyPreds, ProcessedData, 'My', idx_train, idx_test, segregatedIdxs, segregatedVIdxs,
-                                excitationIdxs['My'], PIConfidenceLevel, PIresults, normalizer = ProcessedData['M_den'].to_numpy().reshape(-1),
-                                DEBUG_FLAG=DEBUG_FLAG, SAVE_INDICES=SAVE_INDICES)
+    fixed_coeffs = {}
+    if 'fixed coefficient map' in polyData['My'].keys():
+        fixed_coeffs = polyData['My']['fixed coefficient map']
     
-    PIresults = MyOut['prediction interval metrics']
+
+    MyModel, MyPreds = identifyPolyModel(ProcessedData, 'My', polys_My, fixed_My, fixed_coeffs, idx_train, idx_test, excitationIdxs['My'],
+                                normalizer = ProcessedData['M_den'].to_numpy().reshape(-1), regressorCap=polyModelCap, bias = addBiasMy)
+    MyValid = validatePolyModel(MyModel, MyPreds, ProcessedData, 'My', idx_train, idx_test, segregatedVIdxs,
+                                excitationIdxs['My'], PIConfidenceLevel, PIresults, normalizer = ProcessedData['M_den'].to_numpy().reshape(-1),
+                                DEBUG_FLAG=DEBUG_FLAG, SAVE_INDICES=mdlSavePath)
+    MyOut = makePlots(saveModelID, MyModel, MyPreds, ProcessedData, 'My', MyValid['RMSE'], idx_train, idx_test, mdlSavePath)
+    savePolyModel(MyModel, mdlSavePath, extra=MyValid)
+
+    PIresults = MyValid['prediction interval metrics']
     figMy = MyOut['fig']
     ax = figMy.axes[0]
     ax.set_ylabel(r'$\mathbf{Moment, \quad M_{y}}\quad [Nm]$', fontsize = 16)
     ax.set_xlabel(r'$\mathbf{Sample}\quad [-]$', fontsize = 16)
+    if 'plot limits' in identificationConfig:
+        if 'My' in identificationConfig['plot limits'].keys():
+            ax.set_xlim(identificationConfig['plot limits']['My']['xlims'])
+            ax.set_ylim(identificationConfig['plot limits']['My']['ylims'])
+
 
     # Get simple model for My = kappaMy * Uq
     [kappaMy_w_2, _] = MyModel._techniqueModule._OLS(np.matrix(ProcessedData['U_q'][idx_train]).T, np.matrix(ProcessedData['My'][idx_train]).T, hasBias = False)
@@ -926,26 +1033,40 @@ if identifyMy:
 
     simpleModel.update({'kappaMy_w_2':float(kappaMy_w_2.__array__()[0][0])})
     simpleModel.update({'kappaMy_w':float(kappaMy_w.__array__()[0][0])})
+    IODMoments.append('My')
 
 
 
 if identifyMz:
     print('\n\n[ INFO ] Identifying polynomial model for Mz...')
+    mdlSavePath = os.path.join(modelDir, saveModelID, 'Mz')
+    if not os.path.exists(mdlSavePath):
+        os.makedirs(mdlSavePath)
     polys_Mz = polyData['Mz']['candidates']
     fixed_Mz = polyData['Mz']['fixed']
+    fixed_coeffs = {}
+    if 'fixed coefficient map' in polyData['Mz'].keys():
+        fixed_coeffs = polyData['Mz']['fixed coefficient map']
+    
 
-    MzModel, MzPreds = identifyPolyModel(ProcessedData, 'Mz', polys_Mz, fixed_Mz, idx_train, idx_test, excitationIdxs['Mz'],
+    MzModel, MzPreds = identifyPolyModel(ProcessedData, 'Mz', polys_Mz, fixed_Mz, fixed_coeffs, idx_train, idx_test, excitationIdxs['Mz'],
                                 normalizer = ProcessedData['M_den'].to_numpy().reshape(-1), regressorCap=polyModelCap, bias = addBiasMz)
-
-    MzOut = savePolyModel(saveModelID, modelDir, metadata, MzModel, MzPreds, ProcessedData, 'Mz', idx_train, idx_test, segregatedIdxs, segregatedVIdxs,
+    MzValid = validatePolyModel(MzModel, MzPreds, ProcessedData, 'Mz', idx_train, idx_test, segregatedVIdxs,
                                 excitationIdxs['Mz'], PIConfidenceLevel, PIresults, normalizer = ProcessedData['M_den'].to_numpy().reshape(-1),
-                                DEBUG_FLAG=DEBUG_FLAG, SAVE_INDICES=SAVE_INDICES)    
-   
-    PIresults = MzOut['prediction interval metrics']                                
+                                DEBUG_FLAG=DEBUG_FLAG, SAVE_INDICES=mdlSavePath)
+    MzOut = makePlots(saveModelID, MzModel, MzPreds, ProcessedData, 'Mz', MzValid['RMSE'], idx_train, idx_test, mdlSavePath)
+    savePolyModel(MzModel, mdlSavePath, extra=MzValid)
+
+    PIresults = MzValid['prediction interval metrics']                                
     figMz = MzOut['fig']
     ax = figMz.axes[0]
     ax.set_ylabel(r'$\mathbf{Moment, \quad M_{z}}\quad [Nm]$', fontsize = 16)
-    ax.set_xlabel(r'$\mathbf{Sample}\quad [-]$', fontsize = 16)    
+    ax.set_xlabel(r'$\mathbf{Sample}\quad [-]$', fontsize = 16)
+    if 'plot limits' in identificationConfig:
+        if 'Mz' in identificationConfig['plot limits'].keys():
+            ax.set_xlim(identificationConfig['plot limits']['Mz']['xlims'])
+            ax.set_ylim(identificationConfig['plot limits']['Mz']['ylims'])
+    
 
     # Get simple model for Mz = kappaMz * Ur
     [kappaMz_w_2, _] = MzModel._techniqueModule._OLS(np.matrix(ProcessedData['U_r'][idx_train]).T, np.matrix(ProcessedData['Mz'][idx_train]).T, hasBias = False)
@@ -953,19 +1074,45 @@ if identifyMz:
 
     simpleModel.update({'kappaMz_w_2':float(kappaMz_w_2.__array__()[0][0])})
     simpleModel.update({'kappaMz_w':float(kappaMz_w.__array__()[0][0])})
+    IODMoments.append('Mz')
 
 
 # Save simpleModel json
 with open(os.path.join(savePath, 'simpleModel.json'), 'w') as f:
     json.dump(simpleModel, f, indent = 4)
 
+
 printPIs(PIresults)
 
 # Save PI results
-with open(os.path.join(savePath, 'PIresults.pkl'), 'wb') as f:
-    pkl.dump(PIresults, f)
-    f.close()  
+with open(os.path.join(savePath, 'PIresults.json'), 'w') as f:
+    json.dump(PIresults, f, indent = 4)  
 
 plt.show()
 
-# End
+
+idx_val = np.hstack([idx_test, validationIdxs])
+
+# Check models to evaluate
+if 'evaluate' in identificationConfig.keys():
+    # Expect list of models: e.g. ['Mx', 'Fx']
+    for mdl in identificationConfig['evaluate']:
+        print(f'[ INFO ] Evaluating OLS assumptions for: {mdl}')
+        model = SysID.Model.load(f'{savePath}/{mdl}')
+        ev = model._techniqueModule.evaluate(model.TrainedModel, ProcessedData.iloc[idx_val, :], ProcessedData[mdl][idx_val], showPlots=False) 
+        # ev = model._techniqueModule.evaluate(model.TrainedModel, ProcessedData.iloc[idx_train, :], ProcessedData[mdl][idx_train]) 
+        fig = plotter.plot_eval_results(ev, model)
+    plt.show()
+        
+
+# Forces
+print('[ INFO ] Plotting intended operating domain (IOD) results...')
+MDLMAP = {mdl:SysID.Model.load(f'{savePath}/{mdl}') for mdl in IODForces}
+if len(MDLMAP):
+    plotter.plot_IOD(savePath, MDLMAP, ProcessedData, idx_train, idx_val, excitationIdxs)
+# Moments
+MDLMAP = {mdl:SysID.Model.load(f'{savePath}/{mdl}') for mdl in IODMoments}
+if len(MDLMAP):
+    plotter.plot_IOD(savePath, MDLMAP, ProcessedData, idx_train, idx_val, excitationIdxs)
+
+plotter.show()

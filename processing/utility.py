@@ -134,10 +134,10 @@ def checkConditions_string(conditions, string):
 
 
 
-def extractConfig(rowIdx, logFile):
+def extractConfig(rowIdx, logFile, curdir = None):
     configFile = '{}.json'.format(logFile.loc[rowIdx, 'Drone Config File'])
     configPath = logFile.loc[rowIdx, 'Drone Config Path']
-    path2File = os.path.join(configPath, configFile)
+    path2File = os.path.join(configPath if curdir is None else curdir, configFile)
 
     with open(path2File, 'r') as f:
         configData = json.load(f)

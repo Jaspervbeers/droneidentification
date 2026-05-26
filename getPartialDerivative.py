@@ -11,7 +11,15 @@ DfDxFile = 'dfdx_dfdu.json'
 # TODO: Make a file with 'rules' for replacement of state and input for viable alternatives. 
 x = args['state']
 u = args['input']
-sup = args['extra']
+_sup = args['extra']
+# Check sup for abs(var)
+sup = []
+for s in _sup:
+    if s[0] == r'|' and s[-1] == r'|':
+        s = s[1:-1]
+    if s not in sup:
+        sup.append(s)
+
 
 _poly = [i.replace('bias', '1') for i in args['poly']]
 poly = [p.replace('^', '**') for p in _poly]

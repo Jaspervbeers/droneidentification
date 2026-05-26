@@ -1,16 +1,7 @@
 '''
-Script to create a standalone barebones polynomial model file from a trained SysID polynomial model, without the local dependencies of the SysID class.
-Resultant models are much smaller in size, since they only contain information necessary for making predictions. However, including functionality for
-calculating prediction intervals will increase filesize proportional to training data size, due to required knowledge on observed training data. 
-
-Written by: Jasper van Beers
-Contact: j.j.vanbeers@tudelft.nl
-Date: 09-02-2022
+Converts json models to a portable version compatible with droneModel, which may complain if python versions are inconsistent
 '''
-# ================================================================================================================================ #
 # Imports
-# ================================================================================================================================ #
-import os
 import subprocess
 import dill as pickle
 from numpy import matrix, ones, hstack, dot, add, subtract, divide, multiply, power, nan, array, where, arange, isnan, roots, isclose, pi, abs, zeros, vstack, cos, sin, sum
@@ -21,26 +12,38 @@ from numpy.linalg import LinAlgError, inv
 from json import load as jLoad
 from json import dump as jDump
 
-# This package relies on the system identification pipeline (sysidpipeline). 
-with open('relativeImportLocations.json', 'r') as f:
-    relativeLocs = jLoad(f)
-
-import sys
-sys.path.append(relativeLocs['sysidpipeline'])
-import SysID
 
 
-# ================================================================================================================================ #
-# Classes
-# ================================================================================================================================ #
-'''
-Class bundles SysID polynomial model into an independent object that can be used for predictions without the need for local modules.
-Predictions are made using the .predict(x) method, where x holds the same structure as the data used as model inputs for training. 
-'''
-# TODO: Add ReadMe which documents what is expected of x, or reference to other document/file/script which outlines this. 
+class jsonDroneModel:
+
+    def __init__(self, path, modelID, savepath = None):
+        self.ID = modelID
+        with open(f'{path}/{self.ID}.json', 'r') as f:
+            self.jsonModel = jLoad(f)
+        if savepath is None:
+            savepath = path
+        self.savepath = savepath
+    
+    def toPortable(self, target_model_class, model_set = ['Fx', 'Fy', 'Fz', 'Mx', 'My', 'Mz']):
+        for mdl in model_set:
+            mdl_built = self._build_portable(mdl, target_model_class)
+            with open(f'{self.savepath}/{self.ID}-{mdl}.pkl', 'wb') as f:
+                pickle.dump(mdl_built, f)
+    
+    def _build_portable(self, submodel, target_model_class):
+        self.jsonModel.update({'IOD_tmp':self.jsonModel['IODs'][submodel]})
+        return target_model_class(self.jsonModel['model'][submodel], self.jsonModel)
+
+
+
+# -----------------------------------------
+# target_model_class functions
+# -----------------------------------------
+
+# base polynomial model class, handles the computation of regressors
 class PolynomialModel:
     
-    def __init__(self, config):
+    def __init__(self, jsonModel, config):
         # Keep track of important model metadata
         self.config = config
         # Import necessary functions
@@ -64,19 +67,13 @@ class PolynomialModel:
         self._usePI = False
         self.coefficients = None
         self.polynomial = None
-        return None
+        self.extractModel(jsonModel)
 
 
-    def extractModel(self, sysIDModel, predictionIntervals = False, forceExtraction = False):
+    def extractModel(self, jsonModel, forceExtraction = False):
         if not self.isExtracted or forceExtraction: 
-            self.coefficients = self._getCoefficients(sysIDModel)
-            self.polynomial = self._getPolynomial(sysIDModel)
-            if predictionIntervals:
-                self._usePI = True
-                # self._inv_XtX = sysIDModel.TrainedModel['Model']['_inv(XtX)']
-                # self._s2 = sysIDModel.TrainedModel['Model']['_sigma2']
-                self._inv_XtX = sysIDModel.CurrentModel['Model']['_inv(XtX)']
-                self._s2 = sysIDModel.CurrentModel['Model']['_sigma2']
+            self.coefficients = self._getCoefficients(jsonModel)
+            self.polynomial = self._getPolynomial(jsonModel)
             self.makeRegressors()
         else:
             raise AttributeError('A polynomial model has already been extracted. Set forceExtraction = True extract anyway (will overwrite existing polynomial).')
@@ -96,14 +93,12 @@ class PolynomialModel:
             return A*self.coefficients
 
     
-    def _getCoefficients(self, sysIDModel):
-        # return sysIDModel.TrainedModel['Model']['Parameters']
-        return sysIDModel.CurrentModel['Model']['Parameters']
+    def _getCoefficients(self, jsonModel):
+        return self.npMatrix(self.npArray(jsonModel['coefficients']).reshape(-1, 1))
 
 
-    def _getPolynomial(self, sysIDModel):
-        # return sysIDModel.TrainedModel['Model']['Regressors']
-        return sysIDModel.CurrentModel['Model']['Regressors']
+    def _getPolynomial(self, jsonModel):
+        return jsonModel['regressors']
     
 
     def _BuildRegressorMatrix(self, data, hasBias = True):
@@ -299,15 +294,14 @@ rotorSpeeds = 2-D array with columns (w1, w2, w3, w4) in that order. Rows give o
 '''      
 class DronePolynomialModel(PolynomialModel):
 
-    def __init__(self, droneConfigFilePath, isNormalized = True, hasGravity = False, usesVIN = True, metadata = None, IOD = {}):
-        self.jsonLoad = jLoad
-        with open(droneConfigFilePath, 'r') as f:
-            configData = self.jsonLoad(f)
-        PolynomialModel.__init__(self, configData)
+    def __init__(self, jsonModel, config):
+        PolynomialModel.__init__(self, jsonModel, config)
+        droneConfig = config['droneParams']
         # Keep track of important metadata
-        self.isNormalized = isNormalized
-        self.hasGravity = hasGravity
-        self.VINFLAG = usesVIN
+        self.isNormalized = config['metadata']['isNormalized']
+        self.hasGravity = config['metadata']['hasGravity']
+        self.VINFLAG = config['metadata']['usesVIN']
+        metadata = config['metadata']['identification metadata']
         # Other funcs        
         self.npRoots = roots
         self.npIsclose = isclose
@@ -320,13 +314,13 @@ class DronePolynomialModel(PolynomialModel):
         self.npSum = sum
         self.LinAlgError = LinAlgError
         # self.pdDataFrame = DataFrame
-        self.droneParams = {'R':float(configData['rotor radius']),
-                   'b':float(configData['b']),
-                   'Iv':self.npArray(self.npMatrix(configData['moment of inertia'])), 
-                   'rotor configuration':configData['rotor config'],
-                   'rotor 1 direction':configData['rotor1 rotation direction'],
-                   'idle RPM':float(configData['idle RPM']),
-                   'max RPM':float(configData['max RPM']),
+        self.droneParams = {'R':float(droneConfig['R']),
+                   'b':float(droneConfig['b']),
+                   'Iv':self.npArray(self.npMatrix(droneConfig['Iv'])), 
+                   'rotor configuration':droneConfig['rotor configuration'],
+                   'rotor 1 direction':droneConfig['rotor 1 direction'],
+                   'idle RPM':float(droneConfig['idle RPM']),
+                   'max RPM':float(droneConfig['max RPM']),
                    'm':float(metadata['additional info']['droneMass']),
                    'wHover (rad/s)':metadata['additional info']['hover omega (rad/s)'],
                    'wHover (eRPM)':metadata['additional info']['hover omega (eRPM)'],
@@ -334,9 +328,6 @@ class DronePolynomialModel(PolynomialModel):
                    'rho':1.225,
                    'r_sign':{'CCW':-1, 'CW':1},
                    'number of rotors':4}
-        # # Map normalizer
-        # self.NORMFuncs = {True:self._normalizeData, False:self._skipNormalization}
-        
         # Map induced velocity to true function or dummy function if unused by models
         self.VINFuncs = {True:self._getInducedVelocity_True, False:self._getInducedVelocity_Dummy}
         self._getInducedVelocity = self.VINFuncs[self.VINFLAG]
@@ -350,7 +341,10 @@ class DronePolynomialModel(PolynomialModel):
                         '|u|', '|v|', '|w|', '|mu_x|', '|mu_y|', '|mu_z|',
                         'sin[roll]', 'sin[pitch]', 'sin[yaw]','cos[roll]', 'cos[pitch]', 'cos[yaw]',
                         'F_den', 'M_den']
-        self.IOD = IOD
+        if len(config['IODs']):
+            self.IOD = config['IOD_tmp']
+        else:
+            self.IOD = None
         return None
 
 
@@ -696,8 +690,6 @@ class DronePolynomialModel(PolynomialModel):
                     self.dfvalues[:, self.dfmapping[k]] = newvalue[:, i]
 
 
-
-
 class DroneDiffSystem:
 
     def __init__(self, x, u, polyDroneModels, droneParams):
@@ -985,197 +977,3 @@ class DroneDiffSystem:
     def predict(self, droneInputs, x_dot, u_dot):
         A, B = self.getAB(droneInputs)
         return A*x_dot + B*u_dot
-
-
-
-# ================================================================================================================================ #
-# Definitions
-# ================================================================================================================================ #
-def loadModels(modelPath, mdlID, *args):
-    # Check that arguments are passed
-    if len(args) == 0:
-        raise ValueError('Please pass model names (e.g. Fx) to load!')
-    # Load models and check that metadata is consistent
-    models = {}
-    path = os.path.join(modelPath, mdlID)
-    # Check if actuator dynamics have been estimated
-    hasTau = None
-    if os.path.exists(os.path.join(path, 'taus.json')):
-        print('[ INFO ] Found actuator dynamics information, adding to standalone model.')
-        hasTau = os.path.join(path, 'taus.json')
-    # Check if simple model is present
-    simpleModel = None
-    if os.path.exists(os.path.join(path, 'simpleModel.json')):
-        # print('[ INFO ] Found simpleModel, adding to standalone model.')
-        simpleModel = os.path.join(path, 'simpleModel.json')
-    # Check for intended operating domains
-    IODs = {}
-    hasIOD = False
-    for arg in args:
-        _argiod = {}
-        _concavep = f'{modelPath}/{mdlID}/{arg}/IOD_concave.json'
-        _convexp = f'{modelPath}/{mdlID}/{arg}/IOD_convex.json'
-        if os.path.exists(_concavep):
-            hasIOD = True
-            with open(_concavep, 'r') as f:
-                _concave = jLoad(f)
-            _argiod.update({'concave':_concave})
-        if os.path.exists(_convexp):
-            hasIOD = True
-            with open(_convexp, 'r') as f:
-                _convex = jLoad(f)
-            _argiod.update({'convex':_convex})
-        IODs.update({arg:_argiod})
-    if hasIOD:
-        print('[ INFO ] Found intended operating domain hulls, packaging with standalone model.')
-    models.update({args[0]:SysID.Model.load(os.path.join(path, args[0]))})
-    # Get reference metadata from first argument
-    with open(os.path.join(os.path.join(path, args[0], 'processingMetadata.json')), 'rb') as f:
-        referenceMetadata = jLoad(f)
-    isNormalized = referenceMetadata["data normalization"]['normalize data']
-    hasGravity = not referenceMetadata["data filtering"]["remove influence of gravity"]
-    print('[ INFO ] [makeStandAlonePolyModel.py] Loading {} (normalized: {}, gravity: {})'.format(args[0], isNormalized, hasGravity))
-    try:
-        usesVIN = referenceMetadata["identification parameters"]["add induced velocity to regressors"]
-        VINFlagExists = True
-    except KeyError:
-        print('[ INFO ] Flag for uses induced velocity could not be found in metadata, will confirm with model regressors.')
-        usesVIN = True
-        VINFlagExists = False
-    if len(args) > 1:
-        for a in args[1:]:
-            # Check consistency
-            with open(os.path.join(os.path.join(path, a, 'processingMetadata.json')), 'rb') as f:
-                _metadata = jLoad(f)
-            print('[ INFO ] [makeStandAlonePolyModel.py] Loading {} (normalized: {}, gravity: {})'.format(a, _metadata["data normalization"]['normalize data'], not _metadata["data filtering"]["remove influence of gravity"]))
-            if _metadata['data filtering']["remove influence of gravity"] != referenceMetadata['data filtering']["remove influence of gravity"]:
-                raise ValueError('Gravity-Error: Models appear to be inconsistent (gravity present in one model but absent in another)')
-            if _metadata["data normalization"]['normalize data'] != isNormalized:
-                raise ValueError('Normalization-Error: Models appear to be inconsistent (one model is dimensional and another is not)')
-            if VINFlagExists:
-                if _metadata["identification parameters"]["add induced velocity to regressors"]:
-                    usesVIN = True
-            models.update({a:SysID.Model.load(os.path.join(path, a))})
-    if usesVIN:
-        actuallyUsesVin = False
-        for v in models.values():
-            polynomial = v.CurrentModel['Model']['Regressors']
-            if 'v_in' in '#'.join(polynomial) or 'mu_vin' in '#'.join(polynomial):
-                actuallyUsesVin = True
-                break
-        usesVIN = actuallyUsesVin
-        print(f'[ INFO ] Searched polynomials and updated uses induced velocity to {usesVIN}')
-    return models, isNormalized, hasGravity, usesVIN, referenceMetadata, hasTau, simpleModel, IODs
-
-
-def makeStandalone(savePath, mdlID, standaloneHandler, applyNormalization, hasGravity, usesVIN, mapping, metadata, hasTau, simpleModel, IODs):
-    # init json model
-    jsonModel = {
-        "model":{},
-        "droneParams":{},
-        "DiffSys":{},
-        "IODs":{},
-        "metadata":{
-            "hasGravity":hasGravity,
-            "model ID":mdlID,
-            "isNormalized":applyNormalization,
-            "usesVIN":usesVIN,
-            "identification metadata":metadata
-        }
-    }
-    # Convert to standalone model using handler
-    for a, m in mapping.items():
-        polyModel = standaloneHandler(droneConfigurationFile, isNormalized = applyNormalization, hasGravity = hasGravity, usesVIN = usesVIN, metadata = metadata, IOD = IODs[a])
-        polyModel.extractModel(m)
-        if hasTau is not None:
-            with open(hasTau, 'r') as f:
-                taus = jLoad(f)
-            polyModel.droneParams.update(taus)
-        if simpleModel is not None:
-            with open(simpleModel, 'r') as f:
-                simpleModelData = jLoad(f)
-            polyModel.droneParams.update({'simpleModel':simpleModelData})
-        with open(os.path.join(savePath, mdlID + '-{}.pkl'.format(a)), 'wb') as f:
-            pickle.dump(polyModel, f)
-        # Populate json model fields
-        _jsonMdl = {}
-        _jsonMdl.update({'name':f'{a}-polynomial'})
-        _jsonMdl.update({'regressors':polyModel.polynomial})
-        _jsonMdl.update({'coefficients':polyModel.coefficients.__array__().reshape(-1).tolist()})
-        _jsonMdl.update({'offset':0})
-        jsonModel['model'].update({a:_jsonMdl})
-    droneParams_jsonable = polyModel.droneParams.copy()
-    droneParams_jsonable['Iv'] = droneParams_jsonable['Iv'].__array__().tolist()
-    jsonModel.update({'droneParams':droneParams_jsonable})
-    jsonModel.update({"IODs":IODs})
-    with open(f'{savePath}/{mdlID}.json', 'w') as f:
-        jDump(jsonModel, f, indent = 4)
-    with open(f'{savePath}/IOD.json', 'w') as f:
-        jDump(IODs, f, indent = 4)
-    return None
-
-
-def toStandalone(modelPath, mdlID, savePath, standaloneHandler, *args):
-    # Load and convert SysID polynomial models to standalone variant
-    models, isNormalized, hasGravity, usesVIN, metadata, hasTau, simpleModel, IODs = loadModels(modelPath, mdlID, *args)
-    makeStandalone(savePath, mdlID, standaloneHandler, isNormalized, hasGravity, usesVIN, models, metadata, hasTau, simpleModel, IODs)
-    return None
-
-
-# def toJson(standalone, mdlID, savePath):
-#     # Create a .json model using the sandalone models
-#     return None
-
-# ================================================================================================================================ #
-# Main script
-# ================================================================================================================================ #
-# Load config data
-if len(sys.argv) > 1:
-    configfile = sys.argv[1]
-else:
-    configfile = 'standaloneConfig.json'
-
-with open(configfile, 'r') as f:
-    config = jLoad(f)
-
-# Load models
-# Path to parent folder of SysID model folder
-modelPath = config['model path']
-mdlID = config['model ID']
-
-# Drone configuration directory and filename (if using DronePolynomialModel)
-configPath = config['droneConfig path']
-configFile = config['droneConfig name']
-droneConfigurationFile = os.path.join(configPath, configFile)
-
-# Save models
-savePath = os.path.join(modelPath, mdlID, 'standaloneDiff')
-if not os.path.exists(savePath):
-    os.makedirs(savePath)
-
-# If saveGeneral is true, then the drone specific processing functions will also be saved to the model file,
-#   such that processing can be reproduced when working only with the filtered state and rotor speeds.
-# If saveGeneral is False, then only the model will be stored. Thus, any processing required to obtain the
-#   model inputs (as done for during the training of the model) must be done prior to making predictions. 
-saveGeneral = False
-handler = PolynomialModel
-if not saveGeneral:
-    handler = DronePolynomialModel
-
-toLoad = ['Fx', 'Fy', 'Fz', 'Mx', 'My', 'Mz']
-toStandalone(modelPath, mdlID, savePath, handler, *toLoad)
-
-if config['make moment DiffSys']:
-    with open(os.path.join(savePath, mdlID + '-Mx.pkl'), 'rb') as f:
-        MxModel = pickle.load(f)
-
-    with open(os.path.join(savePath, mdlID + '-My.pkl'), 'rb') as f:
-        MyModel = pickle.load(f)
-
-    with open(os.path.join(savePath, mdlID + '-Mz.pkl'), 'rb') as f:
-        MzModel = pickle.load(f)
-
-    DiffSys = DroneDiffSystem(['p', 'q', 'r'], config['DiffSys u'], [MxModel, MyModel, MzModel], MxModel.droneParams)
-
-    with open(os.path.join(savePath, 'PQR-DiffSys.pkl'), 'wb') as f:
-        pickle.dump(DiffSys, f)

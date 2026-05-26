@@ -83,24 +83,31 @@ def Random_PartitionData(Data, TrainingRatio, *argv):
 
 def getSystemExcitations(excitationIdxs, DataList, local, isolationMethods, variance_threshold=0.5, height_threshold = 0.3, prominence_threshold = 0.3, spread = 0.02):
     references = {'identifyFx':'Fx', 'identifyFy':'Fy', 'identifyFz':'Fz', 'identifyMx':'Mx', 'identifyMy':'My', 'identifyMz':'Mz'}
-    # excitationIdxs = {}
-    # for ref in references.keys():
-    #     excitationIdxs.update({references[ref]:[]})
+    skip = []
+    for m, ei in excitationIdxs.items():
+        if len(ei):
+            print(f'[ WARNING ] Excitation indices for {m} already populated, skipping.')
+            skip.append(m)
     startIdx = 0
     for D in DataList:
         for ref in references.keys():
-            if ref in local.keys():
-                if local[ref]:
-                    ls = excitationIdxs[references[ref]]
-                    idxs = findSystemExcitation(D[references[ref]].to_numpy(), Method = isolationMethods[references[ref]], variance_threshold = variance_threshold, height_threshold=height_threshold, prominence_threshold=prominence_threshold, spread = spread) + startIdx
-                    ls = ls + list(idxs)
-                    excitationIdxs.update({references[ref]:ls})
+            if references[ref] not in skip:
+                if ref in local.keys():
+                    if local[ref]:
+                        ls = excitationIdxs[references[ref]]
+                        idxs = findSystemExcitation(D[references[ref]].to_numpy(), Method = isolationMethods[references[ref]], 
+                                                    variance_threshold = variance_threshold, height_threshold=height_threshold, 
+                                                    prominence_threshold=prominence_threshold, spread = spread, 
+                                                    minHeight=0.1*height_threshold if references[ref].startswith('M') else height_threshold,
+                                                    minvar = 0.05 if references[ref].startswith('M') else 0.5) + startIdx
+                        ls = ls + list(idxs)
+                        excitationIdxs.update({references[ref]:ls})
         startIdx += len(D)         
     return excitationIdxs
 
 
 
-def _electIdentifiableData(X, threshold = 0.15, outlier_cutoff = 0.95, spread = 0.02):
+def _electIdentifiableData(X, threshold = 0.15, outlier_cutoff = 0.95, spread = 0.02, minvar = 0.5):
     '''(Utility) Function to isolate system excitations in signal based on the local variance
 
     :param X: 1-D array containing samples of signal for which excitations should be extracted
@@ -117,7 +124,7 @@ def _electIdentifiableData(X, threshold = 0.15, outlier_cutoff = 0.95, spread = 
     X_sorted_rm = X_sorted[:int(outlier_cutoff*len(X_sorted))]
     # Take last index as representative maximum
     X_max = X_sorted_rm[-1]
-    X_lim = threshold*X_max
+    X_lim = np.nanmax([threshold*X_max, minvar])
     # Find indices of X which are greater than this magnitude 
     relevant_idxs = np.where(np.abs(X) >= X_lim)[0]
     # Simply taking these indices will result in an incomplete signal since regions between peaks 
@@ -147,7 +154,7 @@ def _electIdentifiableData(X, threshold = 0.15, outlier_cutoff = 0.95, spread = 
 
 
 
-def findSystemExcitation(X, Method = 'variance', window = None, variance_threshold = 0.15, outlier_cutoff = 0.95, spread = 0.02, prominence_threshold = 0.3, height_threshold = 0.2, minHeight = 0.02):
+def findSystemExcitation(X, Method = 'variance', window = None, variance_threshold = 0.15, outlier_cutoff = 0.95, spread = 0.02, prominence_threshold = 0.3, height_threshold = 0.2, minHeight = 0.02, minvar = 0.5):
     '''Function to isolate excitations in a signal
     
     :param X: 1-D array containing samples of signal for which excitations should be extracted
@@ -170,7 +177,7 @@ def findSystemExcitation(X, Method = 'variance', window = None, variance_thresho
         # Compute rolling std
         rollingStd = np.nanstd(_rollingWindow(X, window), axis=-1)
         # Find regions of large excitations, based on local variance
-        excitedIdxs = _electIdentifiableData(rollingStd, threshold=variance_threshold, outlier_cutoff=outlier_cutoff, spread=spread)
+        excitedIdxs = _electIdentifiableData(rollingStd, threshold=variance_threshold, outlier_cutoff=outlier_cutoff, spread=spread, minvar=minvar)
     
     elif Method.lower() == 'peak':
         # _X = X[:int(outlier_cutoff*len(X))]
