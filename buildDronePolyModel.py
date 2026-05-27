@@ -23,9 +23,14 @@ from common import plotter, angleFuncs
 with open('relativeImportLocations.json', 'r') as f:
     relativeLocs = json.load(f)
 
-sys.path.append(relativeLocs['sysidpipeline'])
-import SysID
+import importlib.util
+import sys
+sysid_path = relativeLocs['sysidpipeline']
+spec = importlib.util.spec_from_file_location('SysID', f'{sysid_path}/SysID.py')
+SysID = importlib.util.module_from_spec(spec)
 
+sys.modules['SysID'] = SysID
+spec.loader.exec_module(SysID)
 
 # ================================================================================================================================ #
 # Classes
