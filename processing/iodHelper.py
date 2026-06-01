@@ -2,6 +2,7 @@
 import numpy as np
 from scipy.spatial import ConvexHull
 from sklearn.neighbors import KDTree
+from typing import Optional
 
 # Local imports
 from common import plotter
@@ -118,7 +119,7 @@ def make_concave(points: np.ndarray,
                 proportion_threshold: float = 1e-5,
                 passes: int = 1,
                 min_t_ratio: float = 0.0,
-                hull_vertices: np.ndarray | None = None,
+                hull_vertices: Optional[np.ndarray] = None,
                 *,
                 smoothen: bool = True,
                 tip_min_deg: float = 45.0,
